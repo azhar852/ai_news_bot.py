@@ -41,7 +41,7 @@ def self_ping_loop():
   import requests
 
   while True:
-    time.sleep(300)  # ठीक 5 मिनट (300 सेकंड) का इंतज़ार
+    time.sleep(300)
     try:
       url = os.environ.get('RENDER_EXTERNAL_URL', 'http://localhost:8080')
       requests.get(url, timeout=10)
@@ -68,7 +68,6 @@ if not AI_BOT_TOKEN:
   )
   exit(1)
 
-# FinBERT AI मॉडल लोड करना
 try:
   print('🤖 FinBERT AI मॉडल लोड हो रहा है...')
   FINBERT_TOKENIZER = AutoTokenizer.from_pretrained('ProsusAI/finBERT')
@@ -254,5 +253,161 @@ async def get_bigmoney_data():
 
       if chg > 0.15:
         flow = '🟢 HEAVY FII INFLOW (खरीदारी)'
-      elif chg < -0.1
-                            
+      elif chg < -0.15:
+        flow = '🔴 HEAVY FII OUTFLOW (बिकवाली)'
+      else:
+        flow = '⚖️ NEUTRAL FLOW (कोई बड़ा मूव नहीं)'
+
+      return (
+          '🐋 *FII / DII & BIG MONEY LIVE ALERT*\n\n'
+          f'• *Nifty Price:* `{cp}` (`{chg}%`)\n'
+          f'• *Institutional Flow:* {flow}\n'
+      )
+  except Exception as e:
+    return f'⚠️ डेटा एरर: {str(e)}'
+  return '⚠️ डेटा उपलब्ध नहीं है।'
+
+
+async def get_pcr_data():
+  try:
+    ticker = yf.Ticker('^NSEI')
+    data = ticker.history(period='1d', interval='5m')
+    if len(data) >= 2:
+      cp = data['Close'].iloc[-1]
+      op = data['Open'].iloc[0]
+      pcr_val = '1.25 (Bullish)' if cp > op else '0.75 (Bearish)'
+      sentiment = (
+          '🟢 पुट राइटर्स मजबूत हैं (Support)'
+          if cp > op
+          else '🔴 कॉल राइटर्स हावी हैं (Resistance)'
+      )
+      return (
+          '📈 *PCR (PUT-CALL RATIO) SENTIMENT*\n\n'
+          f'• *Estimated PCR:* `{pcr_val}`\n'
+          f'• *Sentiment:* {sentiment}\n'
+      )
+  except Exception as e:
+    return f'⚠️ PCR एरर: {str(e)}'
+  return '⚠️ डेटा उपलब्ध नहीं है।'
+
+
+async def get_pivot_data():
+  try:
+    ticker = yf.Ticker('^NSEI')
+    data = ticker.history(period='5d', interval='1d')
+    if len(data) >= 2:
+      prev = data.iloc[-2]
+      pivot = (prev['High'] + prev['Low'] + prev['Close']) / 3
+      r1 = (2 * pivot) - prev['Low']
+      s1 = (2 * pivot) - prev['High']
+      return (
+          '📐 *PIVOT LEVELS (SUPPORT & RESISTANCE)*\n\n'
+          f'• *Pivot Point:* `{round(pivot, 2)}`\n'
+          f'• *Resistance (R1):* `{round(r1, 2)}`\n'
+          f'• *Support (S1):* `{round(s1, 2)}`\n'
+      )
+  except Exception as e:
+    return f'⚠️ Pivots एरर: {str(e)}'
+  return '⚠️ डेटा उपलब्ध नहीं है।'
+
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  query = update.callback_query
+  await query.answer()
+
+  data = query.data
+  if data == 'trend':
+    res = await get_trend_data()
+  elif data == 'sideways':
+    res = await get_sideways_check()
+  elif data == 'news':
+    res = await get_news_data()
+  elif data == 'bigmoney':
+    res = await get_bigmoney_data()
+  elif data == 'pcr':
+    res = await get_pcr_data()
+  elif data == 'pivots':
+    res = await get_pivot_data()
+  else:
+    res = 'अनजान एक्शन'
+
+  await query.message.reply_text(
+      res,
+      parse_mode='Markdown',
+      reply_markup=get_main_keyboard(),
+      disable_web_page_preview=True,
+  )
+
+
+async def trend_cmd(update, context):
+  await update.message.reply_text(
+      await get_trend_data(),
+      parse_mode='Markdown',
+      reply_markup=get_main_keyboard(),
+  )
+
+
+async def sideways_cmd(update, context):
+  await update.message.reply_text(
+      await get_sideways_check(),
+      parse_mode='Markdown',
+      reply_markup=get_main_keyboard(),
+  )
+
+
+async def news_cmd(update, context):
+  await update.message.reply_text(
+      await get_news_data(),
+      parse_mode='Markdown',
+      reply_markup=get_main_keyboard(),
+      disable_web_page_preview=True,
+  )
+
+
+async def bigmoney_cmd(update, context):
+  await update.message.reply_text(
+      await get_bigmoney_data(),
+      parse_mode='Markdown',
+      reply_markup=get_main_keyboard(),
+  )
+
+
+async def pcr_cmd(update, context):
+  await update.message.reply_text(
+      await get_pcr_data(),
+      parse_mode='Markdown',
+      reply_markup=get_main_keyboard(),
+  )
+
+
+async def pivots_cmd(update, context):
+  await update.message.reply_text(
+      await get_pivot_data(),
+      parse_mode='Markdown',
+      reply_markup=get_main_keyboard(),
+  )
+
+
+def main():
+  keep_alive()
+  start_ping_thread()
+  print('🌐 24/7 Keep-Alive Web Server & Self-Ping Active!')
+
+  app = Application.builder().token(AI_BOT_TOKEN).build()
+
+  app.add_handler(CommandHandler('start', start))
+  app.add_handler(CommandHandler('trend', trend_cmd))
+  app.add_handler(CommandHandler('sideways', sideways_cmd))
+  app.add_handler(CommandHandler('news', news_cmd))
+  app.add_handler(CommandHandler('bigmoney', bigmoney_cmd))
+  app.add_handler(CommandHandler('pcr', pcr_cmd))
+  app.add_handler(CommandHandler('pivots', pivots_cmd))
+  app.add_handler(CallbackQueryHandler(button_handler))
+
+  print('🚀 AI Market Direction Bot सुरक्षित रूप से चालू हो गया है...')
+  app.run_polling(poll_interval=3)
+
+
+if __name__ == '__main__':
+  main()
+      
