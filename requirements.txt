@@ -1,1 +1,8 @@
+python-telegram-bot
+transformers
+torch
+yfinance
+feedparser
+requests
+flask
 
