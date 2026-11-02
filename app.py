@@ -162,3 +162,87 @@ def telegram_webhook():
           em = '🟢' if pnl >= 0 else '🔴'
           msg += f'{em} `{sym}` | Qty: `{q}`\n  Entry: `₹{ent:,.2f}` → Exit: `₹{ext:,.2f}`\n  P&L: `₹{pnl:,.2f}` | {dt}\n\n'
         send_telegram_message(chat_id, msg)
+elif text_lower == '/autostart':
+        AUTO_TRADE_CONFIG['enabled'] = True
+        send_telegram_message(chat_id, f'🤖 *AUTO TRADING STARTED*\n\n• Strategy: VWAP + RSI\n• SL: `{AUTO_TRADE_CONFIG["sl_points"]} pts` | Target: `{AUTO_TRADE_CONFIG["target_points"]} pts`\n• Trailing: Har `{AUTO_TRADE_CONFIG["trail_step_points"]} pts` par\n• Max: `{AUTO_TRADE_CONFIG["max_trades_per_day"]}/day`\n\n💡 Bot ab market hours mein auto trade karega.')
+
+      elif text_lower == '/autostop':
+        AUTO_TRADE_CONFIG['enabled'] = False
+        send_telegram_message(chat_id, '⏸️ *AUTO TRADING STOPPED*')
+
+      elif text_lower == '/autostatus':
+        status = '🟢 ACTIVE' if AUTO_TRADE_CONFIG['enabled'] else '🔴 INACTIVE'
+        pos = get_auto_position(chat_id)
+        t_trades = get_today_trades_count(chat_id)
+        t_pnl = get_today_pnl(chat_id)
+        msg = f'🤖 *AUTO STATUS*\n\n• Status: {status}\n• Symbol: `{AUTO_TRADE_CONFIG["symbol"]}`\n• Today: `{t_trades}/{AUTO_TRADE_CONFIG["max_trades_per_day"]}`\n• Today P&L: `₹{t_pnl:,.2f}`\n'
+        if pos:
+          pid, sym, q, ent, sl, tgt, typ, _ = pos[:8]
+          cur = get_symbol_price(sym)
+          if isinstance(cur, (int, float)):
+            pnl = (cur - ent) * q if typ == 'BUY' else (ent - cur) * q
+            msg += f'\n📊 *Open:*\n• ID: `{pid}` | {typ} `{sym}`\n• Entry: `₹{ent:,.2f}` | Cur: `₹{cur:,.2f}`\n• SL: `₹{sl:,.2f}` | Target: `₹{tgt:,.2f}`\n• P&L: `₹{pnl:,.2f}`'
+        send_telegram_message(chat_id, msg)
+
+      elif text_lower == '/autostats':
+        stats = get_auto_stats(chat_id)
+        if stats['total'] == 0: send_telegram_message(chat_id, '📭 *No Auto Trades Yet*')
+        else:
+          em = '🟢' if stats['pnl'] >= 0 else '🔴'
+          send_telegram_message(chat_id, f'📊 *AUTO PERFORMANCE*\n\n• Total: `{stats["total"]}`\n• Wins: `{stats["wins"]}` | Losses: `{stats["losses"]}`\n• Win Rate: `{stats["win_rate"]:.1f}%`\n• Total P&L: {em} `₹{stats["pnl"]:,.2f}`')
+
+      elif text_lower in ['/vix', '/india_vix']: send_telegram_message(chat_id, get_real_vix())
+      elif text_lower in ['/global', '/world']: send_telegram_message(chat_id, get_global_markets())
+      elif text_lower in ['/usdinr', '/dollar']: send_telegram_message(chat_id, get_usd_inr())
+      elif text_lower in ['/metals', '/gold']: send_telegram_message(chat_id, get_gold_silver())
+      elif text_lower in ['/sectors', '/sector']: send_telegram_message(chat_id, get_sector_performance())
+      elif text_lower in ['/expiry', '/expiration']: send_telegram_message(chat_id, get_next_expiry())
+      elif text_lower == '/news': send_telegram_message(chat_id, get_market_news())
+      elif text_lower == '/reversal':
+        tr = get_live_market_trend('^NSEI')
+        send_telegram_message(chat_id, f'🔄 *REVERSAL STATUS*\n• Status: {tr["status"]}\n• Price: `{tr["price"]}`\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n💡 {tr["action"]}')
+      elif text_lower == '/ai_analysis': send_telegram_message(chat_id, get_ai_trading_analysis('General Market Overview'))
+      elif text_lower == '/ai' or text_lower.startswith('/ai '):
+        query = text[3:].strip() or 'Overall market condition'
+        send_telegram_message(chat_id, get_ai_trading_analysis(query))
+      elif text_lower in ['/trend', '/market']:
+        tr = get_live_market_trend('^NSEI')
+        send_telegram_message(chat_id, f'🎯 *LIVE TREND*\n• Price: `{tr["price"]}` ({tr["change"]}%)\n• Status: {tr["status"]}\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n💡 {tr["action"]}')
+      elif text_lower in ['/nifty', '/nifty50']:
+        tr = get_live_market_trend('^NSEI')
+        send_telegram_message(chat_id, f'📊 *NIFTY 50*\n• Price: `{tr["price"]}` ({tr["change"]}%)\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n• Bias: {tr["status"]}')
+      elif text_lower in ['/banknifty']:
+        tr = get_live_market_trend('^NSEBANK')
+        send_telegram_message(chat_id, f'🏦 *BANK NIFTY*\n• Price: `{tr["price"]}` ({tr["change"]}%)\n• Bias: {tr["status"]}')
+      elif text_lower in ['/sensex']:
+        tr = get_live_market_trend('^BSESN')
+        send_telegram_message(chat_id, f'📈 *SENSEX*\n• Price: `{tr["price"]}` ({tr["change"]}%)\n• Bias: {tr["status"]}')
+      elif text_lower == '/pivots': send_telegram_message(chat_id, get_pivot_levels('^NSEI'))
+      elif text_lower == '/pcr':
+        p = analyze_pcr_data()
+        send_telegram_message(chat_id, f'📈 *PCR*\n• Value: `{p["pcr"]}`\n• Sentiment: {p["sentiment"]}')
+      elif text_lower == '/bigmoney':
+        bm = get_big_money_alert()
+        send_telegram_message(chat_id, f'🐋 *SMART MONEY*\n• {bm["action"]}\n• {bm["details"]}')
+      elif text_lower == '/commodity': send_telegram_message(chat_id, '🛢️ *MCX COMMODITY*\n• Check Crude Oil, Gold & Silver near key support levels.')
+      elif text_lower == '/support': send_telegram_message(chat_id, '📋 *SUPPORT*\n\n• For MSME registration or tech support in Bhopal, contact admin.\n\n_Status: Verified & Active_ ✅')
+      elif text_lower == '/summary': send_telegram_message(chat_id, get_daily_summary())
+      elif text_lower == '/signal':
+        tr = get_live_market_trend('^NSEI')
+        send_telegram_message(chat_id, f'⚡ *SCALP SIGNAL*\n• Price: `{tr["price"]}`\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n• Mode: {tr["status"]}\n💡 {tr["action"]}')
+      else:
+        send_telegram_message(chat_id, '✅ Command received. Use buttons below:', reply_markup=get_main_keyboard())
+
+  except Exception as e:
+    logging.error(f'Webhook error: {e}')
+  return 'OK', 200
+
+# Start Background Threads
+threading.Thread(target=keep_alive, daemon=True).start()
+threading.Thread(target=background_automation_scheduler, daemon=True).start()
+threading.Thread(target=real_time_entry_scanner, daemon=True).start()
+threading.Thread(target=auto_trading_scanner, daemon=True).start()
+
+if __name__ == '__main__':
+  port = int(os.environ.get('PORT', 10000))
+  app.run(host='0.0.0.0', port=port)
