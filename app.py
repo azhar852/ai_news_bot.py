@@ -162,7 +162,7 @@ def telegram_webhook():
           em = '🟢' if pnl >= 0 else '🔴'
           msg += f'{em} `{sym}` | Qty: `{q}`\n  Entry: `₹{ent:,.2f}` → Exit: `₹{ext:,.2f}`\n  P&L: `₹{pnl:,.2f}` | {dt}\n\n'
         send_telegram_message(chat_id, msg)
-elif text_lower == '/autostart':
+        elif text_lower == '/autostart':
         AUTO_TRADE_CONFIG['enabled'] = True
         send_telegram_message(chat_id, f'🤖 *AUTO TRADING STARTED*\n\n• Strategy: VWAP + RSI\n• SL: `{AUTO_TRADE_CONFIG["sl_points"]} pts` | Target: `{AUTO_TRADE_CONFIG["target_points"]} pts`\n• Trailing: Har `{AUTO_TRADE_CONFIG["trail_step_points"]} pts` par\n• Max: `{AUTO_TRADE_CONFIG["max_trades_per_day"]}/day`\n\n💡 Bot ab market hours mein auto trade karega.')
 
