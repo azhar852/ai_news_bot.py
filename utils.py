@@ -140,7 +140,7 @@ def process_action(chat_id, data_action):
         send_telegram_message(chat_id, f'⚡ *REAL-TIME SIGNAL DESK*\n• Index Price: `{tr["price"]}`\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n• Mode: {tr["status"]}\n💡 {tr["action"]}')
     elif data_action == 'paper_help': send_telegram_message(chat_id, '💰 *PAPER TRADING COMMANDS*\n\n• `/paper` - Check wallet balance\n• `/buy SYMBOL QTY` - Buy position\n• `/sell SYMBOL QTY` - Sell position\n• `/positions` - View open positions\n• `/close ID` - Close position\n• `/paperhistory` - View completed trades')
     elif data_action == 'auto_help': send_telegram_message(chat_id, f'🤖 *AUTO TRADING COMMANDS*\n\n• `/autostart` - Start auto trading\n• `/autostop` - Stop auto trading\n• `/autostatus` - View current status\n• `/autostats` - View performance\n\n💡 *Current Config:*\n• SL: `{AUTO_TRADE_CONFIG["sl_points"]} pts`\n• Target: `{AUTO_TRADE_CONFIG["target_points"]} pts`\n• Trail: `{AUTO_TRADE_CONFIG["trail_step_points"]} pts`')
-        def get_real_vix():
+    def get_real_vix():
     try:
         vix = yf.Ticker('^INDIAVIX')
         data = vix.history(period='2d', interval='1d')
