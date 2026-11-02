@@ -1,6 +1,18 @@
 import os, logging, threading
 from flask import Flask, request
-from utils import (PROCESSED_UPDATE_IDS, AUTO_TRADE_CONFIG, add_user_to_db, analyze_pcr_data, answer_callback_query, auto_trading_scanner, background_automation_scheduler, close_auto_position, close_paper_position, get_ai_trading_analysis, get_auto_position, get_auto_stats, get_big_money_alert, get_daily_summary, get_db_connection, get_global_markets, get_gold_silver, get_live_market_trend, get_main_keyboard, get_market_news, get_next_expiry, get_open_positions, get_paper_history, get_paper_wallet, get_pivot_levels, get_real_vix, get_sector_performance, get_symbol_price, get_today_pnl, get_today_trades_count, get_usd_inr, keep_alive, open_paper_position, process_action, real_time_entry_scanner, send_telegram_message)
+from utils import (PROCESSED_UPDATE_IDS, AUTO_TRADE_CONFIG, add_user_to_db,
+    analyze_pcr_data, answer_callback_query, auto_trading_scanner,
+    background_automation_scheduler, close_auto_position,
+    close_paper_position, get_ai_trading_analysis, get_auto_position,
+    get_auto_stats, get_big_money_alert, get_daily_summary,
+    get_db_connection, get_global_markets, get_gold_silver,
+    get_live_market_trend, get_main_keyboard, get_market_news,
+    get_next_expiry, get_open_positions, get_paper_history,
+    get_paper_wallet, get_pivot_levels, get_real_vix,
+    get_sector_performance, get_symbol_price, get_today_pnl,
+    get_today_trades_count, get_usd_inr, keep_alive,
+    open_paper_position, process_action, real_time_entry_scanner,
+    send_telegram_message, get_crude_oil_data)
 
 app = Flask(__name__)
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -43,8 +55,7 @@ def telegram_webhook():
             elif text_lower.startswith('/calc'):
                 try:
                     parts = text.split()
-                    if len(parts) < 2:
-                        raise IndexError
+                    if len(parts) < 2: raise IndexError
                     entry = float(parts[1])
                     sl = entry * 0.99
                     t1 = entry + (entry - sl) * 2
@@ -59,8 +70,7 @@ def telegram_webhook():
             elif text_lower.startswith('/trade'):
                 try:
                     parts = text.split()
-                    if len(parts) < 5:
-                        raise IndexError
+                    if len(parts) < 5: raise IndexError
                     sym, ent, ext, q = parts[1], float(parts[2]), float(parts[3]), int(parts[4])
                     pnl = (ext - ent) * q
                     conn = get_db_connection()
@@ -78,11 +88,9 @@ def telegram_webhook():
             elif text_lower.startswith('/buy '):
                 try:
                     parts = text.split()
-                    if len(parts) < 3:
-                        raise IndexError
+                    if len(parts) < 3: raise IndexError
                     sym, qty = parts[1].upper(), int(parts[2])
-                    if qty <= 0:
-                        raise ValueError
+                    if qty <= 0: raise ValueError
                     price = get_symbol_price(sym)
                     if not isinstance(price, (int, float)) or price <= 0:
                         send_telegram_message(chat_id, '⚠️ Invalid symbol/price.')
@@ -102,11 +110,9 @@ def telegram_webhook():
             elif text_lower.startswith('/sell '):
                 try:
                     parts = text.split()
-                    if len(parts) < 3:
-                        raise IndexError
+                    if len(parts) < 3: raise IndexError
                     sym, qty = parts[1].upper(), int(parts[2])
-                    if qty <= 0:
-                        raise ValueError
+                    if qty <= 0: raise ValueError
                     price = get_symbol_price(sym)
                     if not isinstance(price, (int, float)) or price <= 0:
                         send_telegram_message(chat_id, '⚠️ Invalid symbol/price.')
@@ -235,7 +241,7 @@ def telegram_webhook():
                 bm = get_big_money_alert()
                 send_telegram_message(chat_id, f'🐋 *SMART MONEY*\n• {bm["action"]}\n• {bm["details"]}')
             elif text_lower == '/commodity':
-                send_telegram_message(chat_id, '🛢️ *MCX COMMODITY*\n• Check Crude Oil, Gold & Silver near key support levels.')
+                send_telegram_message(chat_id, get_crude_oil_data())
             elif text_lower == '/support':
                 send_telegram_message(chat_id, '📋 *SUPPORT*\n\n• For MSME registration or tech support in Bhopal, contact admin.\n\n_Status: Verified & Active_ ✅')
             elif text_lower == '/summary':
