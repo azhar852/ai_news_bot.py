@@ -275,3 +275,378 @@ def calculate_vwap(data):
   except Exception as e: logging.error(f'VWAP Calculation Error: {e}')
   return 0.0
   
+def get_live_market_trend(symbol='^NSEI'):
+  try:
+    ticker = yf.Ticker(symbol)
+    data_5m = ticker.history(period='5d', interval='5m')
+    if len(data_5m) >= 5:
+      current_price = round(data_5m['Close'].iloc[-1], 2)
+      rsi_val = calculate_rsi(data_5m)
+      vwap_val = calculate_vwap(data_5m)
+      open_price = data_5m['Open'].iloc[0]
+      if open_price == 0: open_price = current_price
+      change_pct = round(((current_price - open_price) / open_price) * 100, 2)
+      if current_price > vwap_val and rsi_val > 50:
+        status = '🟢 BULLISH (Upward Momentum)'
+        action = 'Price is above VWAP with RSI > 50. Look for Call (CE) opportunities.'
+        bias = 'BULLISH'
+      elif current_price < vwap_val and rsi_val < 50:
+        status = '🔴 BEARISH (Downward Momentum)'
+        action = 'Price is below VWAP with RSI < 50. Look for Put (PE) opportunities.'
+        bias = 'BEARISH'
+      else:
+        status = '⚖️ CONSOLIDATION / SIDEWAYS'
+        action = 'Market is hovering around VWAP. Wait for a clear breakout.'
+        bias = 'SIDEWAYS'
+      return {'price': current_price, 'change': change_pct, 'rsi': rsi_val, 'vwap': vwap_val, 'status': status, 'action': action, 'bias': bias}
+  except Exception as e: logging.error(f'Live Market Trend Error for {symbol}: {e}')
+  try:
+    ticker = yf.Ticker(symbol)
+    data_15m = ticker.history(period='5d', interval='15m')
+    if len(data_15m) >= 2:
+      current_price = round(data_15m['Close'].iloc[-1], 2)
+      return {'price': current_price, 'change': 0.0, 'rsi': 50.0, 'vwap': current_price, 'status': '⚖️ LIVE DATA (15m)', 'action': 'Market is active. Check chart for exact levels.', 'bias': 'NEUTRAL'}
+  except Exception as e: logging.error(f'Fallback Trend Error: {e}')
+  return {'price': 'N/A', 'change': 0.0, 'rsi': 50.0, 'vwap': 0.0, 'status': '⚖️ MARKET CHECK IN PROGRESS', 'action': 'Verify with chart indicators.', 'bias': 'NEUTRAL'}
+
+def get_pivot_levels(symbol='^NSEI'):
+  try:
+    ticker = yf.Ticker(symbol)
+    data = ticker.history(period='5d', interval='1d')
+    if len(data) >= 2:
+      prev = data.iloc[-2]
+      high, low, close = prev['High'], prev['Low'], prev['Close']
+      pivot = (high + low + close) / 3
+      r1, s1 = (2 * pivot) - low, (2 * pivot) - high
+      r2, s2 = pivot + (high - low), pivot - (high - low)
+      return (f'📐 *AUTOMATIC PIVOT & S/R LEVELS*\n\n• *Pivot Point:* `{round(pivot, 2)}`\n• *Resistance 1 (R1):* `{round(r1, 2)}`\n• *Resistance 2 (R2):* `{round(r2, 2)}`\n• *Support 1 (S1):* `{round(s1, 2)}`\n• *Support 2 (S2):* `{round(s2, 2)}`\n\n💡 *Usage:* Trade breakouts above R1 or bounces near S1.')
+  except Exception as e: logging.error(f'Pivot Error: {e}')
+  return '📐 *Pivot Levels calculation currently updating.*'
+
+def analyze_pcr_data(tr=None):
+  if not tr: tr = get_live_market_trend('^NSEI')
+  if tr['bias'] == 'BEARISH': return {'pcr': 0.75, 'sentiment': '🔴 BEARISH / CALL WRITING HEAVY', 'details': 'Call Writers building resistance.'}
+  elif tr['bias'] == 'BULLISH': return {'pcr': 1.25, 'sentiment': '🟢 BULLISH / PUT WRITING DOMINANT', 'details': 'Put Writers supporting down levels.'}
+  return {'pcr': 1.00, 'sentiment': '⚖️ NEUTRAL / RANGEBOUND', 'details': 'Balanced OI buildup.'}
+
+def get_big_money_alert(tr=None):
+  if not tr: tr = get_live_market_trend('^NSEI')
+  if tr['bias'] == 'BEARISH': return {'action': '🔴 HEAVY FII OUTFLOW (SELLING)', 'details': 'FII net selling observed in Index Futures.'}
+  elif tr['bias'] == 'BULLISH': return {'action': '🟢 HEAVY FII INFLOW (BUYING)', 'details': 'FII strong net buying observed.'}
+  return {'action': '⚖️ NEUTRAL FLOW', 'details': 'Mixed institutional activity.'}
+
+def get_daily_summary():
+  tr = get_live_market_trend('^NSEI')
+  pcr = analyze_pcr_data(tr)
+  bm = get_big_money_alert(tr)
+  return (f'📊 *DAILY MARKET SUMMARY & TECHNICAL REPORT*\n\n• *Nifty Price:* `{tr["price"]}` ({tr["change"]}%)\n• *VWAP:* `{tr["vwap"]}` | *RSI:* `{tr["rsi"]}`\n• *Overall Trend Bias:* {tr["status"]}\n• *Derivatives Sentiment:* {pcr["sentiment"]}\n• *Institutional Flow:* {bm["action"]}\n\n💡 *Next Session Plan:* {tr["action"]}')
+
+def get_ai_trading_analysis(query):
+  tr = get_live_market_trend('^NSEI')
+  pcr = analyze_pcr_data(tr)
+  bm = get_big_money_alert(tr)
+  return (f'🤖 *AI TECHNICAL ASSISTANT*\n\n• *Query:* _{query}_\n• *Nifty Live:* `{tr["price"]}` ({tr["change"]}%)\n• *VWAP:* `{tr["vwap"]}` | *RSI:* `{tr["rsi"]}`\n• *Market Bias:* {tr["status"]}\n• *Smart Money:* {bm["action"]}\n\n💡 *Recommendation:* {tr["action"]}')
+
+def init_paper_wallet(chat_id):
+  try:
+    conn = get_db_connection()
+    conn.cursor().execute('INSERT OR IGNORE INTO paper_wallets (chat_id, balance) VALUES (?, ?)', (chat_id, 100000.0))
+    conn.commit()
+    conn.close()
+  except Exception as e: logging.error(f'Paper Wallet Init Error: {e}')
+
+def get_paper_wallet(chat_id):
+  try:
+    conn = get_db_connection()
+    row = conn.cursor().execute('SELECT balance FROM paper_wallets WHERE chat_id = ?', (chat_id,)).fetchone()
+    conn.close()
+    if row: return row[0]
+    init_paper_wallet(chat_id)
+    return 100000.0
+  except Exception as e: logging.error(f'Get Wallet Error: {e}')
+  return 0.0
+
+def update_wallet_balance(chat_id, new_balance):
+  try:
+    conn = get_db_connection()
+    conn.cursor().execute('UPDATE paper_wallets SET balance = ? WHERE chat_id = ?', (new_balance, chat_id))
+    conn.commit()
+    conn.close()
+  except Exception as e: logging.error(f'Update Wallet Error: {e}')
+
+def open_paper_position(chat_id, symbol, qty, entry_price):
+  try:
+    conn = get_db_connection()
+    conn.cursor().execute('INSERT INTO paper_positions (chat_id, symbol, qty, entry_price, opened_at) VALUES (?, ?, ?, ?, datetime("now"))', (chat_id, symbol, qty, entry_price))
+    conn.commit()
+    pos_id = conn.cursor().lastrowid
+    conn.close()
+    return pos_id
+  except Exception as e: logging.error(f'Open Position Error: {e}')
+  return None
+
+def get_open_positions(chat_id):
+  try:
+    conn = get_db_connection()
+    rows = conn.cursor().execute('SELECT id, symbol, qty, entry_price, opened_at FROM paper_positions WHERE chat_id = ?', (chat_id,)).fetchall()
+    conn.close()
+    return rows
+  except Exception as e: logging.error(f'Get Positions Error: {e}')
+  return []
+
+def close_paper_position(position_id, chat_id, exit_price):
+  try:
+    conn = get_db_connection()
+    c = conn.cursor()
+    row = c.execute('SELECT symbol, qty, entry_price FROM paper_positions WHERE id = ? AND chat_id = ?', (position_id, chat_id)).fetchone()
+    if not row: conn.close(); return None
+    symbol, qty, entry_price = row
+    pnl = (exit_price - entry_price) * qty
+    c.execute('INSERT INTO paper_history (chat_id, symbol, qty, entry_price, exit_price, pnl, opened_at, closed_at) SELECT chat_id, symbol, qty, entry_price, ?, ?, opened_at, datetime("now") FROM paper_positions WHERE id = ?', (exit_price, pnl, position_id))
+    c.execute('DELETE FROM paper_positions WHERE id = ?', (position_id,))
+    current_balance = get_paper_wallet(chat_id)
+    update_wallet_balance(chat_id, current_balance + pnl)
+    conn.commit()
+    conn.close()
+    return {'symbol': symbol, 'qty': qty, 'entry': entry_price, 'exit': exit_price, 'pnl': pnl}
+  except Exception as e: logging.error(f'Close Position Error: {e}')
+  return None
+
+def get_paper_history(chat_id, limit=10):
+  try:
+    conn = get_db_connection()
+    rows = conn.cursor().execute('SELECT symbol, qty, entry_price, exit_price, pnl, closed_at FROM paper_history WHERE chat_id = ? ORDER BY closed_at DESC LIMIT ?', (chat_id, limit)).fetchall()
+    conn.close()
+    return rows
+  except Exception as e: logging.error(f'Get History Error: {e}')
+  return []
+
+def get_symbol_price(symbol):
+  symbol_map = {'NIFTY': '^NSEI', 'BANKNIFTY': '^NSEBANK', 'SENSEX': '^BSESN'}
+  yf_symbol = symbol_map.get(symbol.upper(), symbol)
+  tr = get_live_market_trend(yf_symbol)
+  return tr.get('price')
+
+def get_auto_position(chat_id):
+  try:
+    conn = get_db_connection()
+    row = conn.cursor().execute('SELECT id, symbol, qty, entry_price, sl_price, target_price, type, opened_at FROM auto_positions WHERE chat_id = ? LIMIT 1', (chat_id,)).fetchone()
+    conn.close()
+    return row
+  except Exception as e: logging.error(f'Get Auto Position Error: {e}')
+  return None
+
+def open_auto_position(chat_id, symbol, qty, entry_price, sl_price, target_price, trade_type):
+  try:
+    conn = get_db_connection()
+    conn.cursor().execute('INSERT INTO auto_positions (chat_id, symbol, qty, entry_price, sl_price, target_price, type, highest_price, lowest_price, trailing_sl_steps, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime("now"))', (chat_id, symbol, qty, entry_price, sl_price, target_price, trade_type, entry_price, entry_price))
+    conn.commit()
+    pos_id = conn.cursor().lastrowid
+    conn.close()
+    return pos_id
+  except Exception as e: logging.error(f'Open Auto Position Error: {e}')
+  return None
+
+def close_auto_position(position_id, chat_id, exit_price, exit_reason):
+  try:
+    conn = get_db_connection()
+    c = conn.cursor()
+    row = c.execute('SELECT symbol, qty, entry_price, type, opened_at FROM auto_positions WHERE id = ? AND chat_id = ?', (position_id, chat_id)).fetchone()
+    if not row: conn.close(); return None
+    symbol, qty, entry_price, trade_type, opened_at = row
+    pnl = (exit_price - entry_price) * qty if trade_type == 'BUY' else (entry_price - exit_price) * qty
+    c.execute('INSERT INTO auto_trades (chat_id, symbol, qty, entry_price, exit_price, pnl, type, exit_reason, opened_at, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime("now"))', (chat_id, symbol, qty, entry_price, exit_price, pnl, trade_type, exit_reason, opened_at))
+    c.execute('DELETE FROM auto_positions WHERE id = ?', (position_id,))
+    today = datetime.now().strftime('%Y-%m-%d')
+    c.execute('INSERT INTO auto_daily_stats (date, trades_count, wins, losses, pnl) VALUES (?, 1, ?, ?, ?) ON CONFLICT(date) DO UPDATE SET trades_count = trades_count + 1, wins = wins + ?, losses = losses + ?, pnl = pnl + ?', (today, 1 if pnl > 0 else 0, 1 if pnl <= 0 else 0, pnl, 1 if pnl > 0 else 0, 1 if pnl <= 0 else 0, pnl))
+    conn.commit()
+    conn.close()
+    return {'symbol': symbol, 'qty': qty, 'entry': entry_price, 'exit': exit_price, 'pnl': pnl, 'type': trade_type, 'reason': exit_reason}
+  except Exception as e: logging.error(f'Close Auto Position Error: {e}')
+  return None
+
+def get_today_trades_count(chat_id):
+  try:
+    conn = get_db_connection()
+    count = conn.cursor().execute('SELECT COUNT(*) FROM auto_trades WHERE chat_id = ? AND DATE(closed_at) = ?', (chat_id, datetime.now().strftime('%Y-%m-%d'))).fetchone()[0]
+    conn.close()
+    return count
+  except Exception as e: logging.error(f'Get Today Trades Error: {e}')
+  return 0
+
+def get_today_pnl(chat_id):
+  try:
+    conn = get_db_connection()
+    pnl = conn.cursor().execute('SELECT COALESCE(SUM(pnl), 0) FROM auto_trades WHERE chat_id = ? AND DATE(closed_at) = ?', (chat_id, datetime.now().strftime('%Y-%m-%d'))).fetchone()[0]
+    conn.close()
+    return pnl
+  except Exception as e: logging.error(f'Get Today PnL Error: {e}')
+  return 0.0
+
+def get_auto_stats(chat_id):
+  try:
+    conn = get_db_connection()
+    row = conn.cursor().execute('SELECT COUNT(*), SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END), SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END), COALESCE(SUM(pnl), 0) FROM auto_trades WHERE chat_id = ?', (chat_id,)).fetchone()
+    conn.close()
+    if row and row[0] > 0:
+      total, wins, losses, pnl = row
+      win_rate = (wins / total * 100) if total > 0 else 0
+      return {'total': total, 'wins': wins, 'losses': losses, 'pnl': pnl, 'win_rate': win_rate}
+    return {'total': 0, 'wins': 0, 'losses': 0, 'pnl': 0.0, 'win_rate': 0.0}
+  except Exception as e: logging.error(f'Get Auto Stats Error: {e}')
+  return {'total': 0, 'wins': 0, 'losses': 0, 'pnl': 0.0, 'win_rate': 0.0}
+
+def update_trailing_stop_loss(position_id, chat_id, current_price):
+  try:
+    conn = get_db_connection()
+    c = conn.cursor()
+    row = c.execute('SELECT entry_price, sl_price, target_price, type, trailing_sl_steps FROM auto_positions WHERE id = ? AND chat_id = ?', (position_id, chat_id)).fetchone()
+    if not row: conn.close(); return None, False
+    entry_price, sl_price, target_price, trade_type, trailing_steps = row
+    trail_step = AUTO_TRADE_CONFIG['trail_step_points']
+    sl_updated = False
+    new_sl = sl_price
+    new_steps = trailing_steps
+    if trade_type == 'BUY':
+      profit_points = current_price - entry_price
+      profit_steps = int(profit_points / trail_step)
+      if profit_steps > trailing_steps:
+        new_sl = entry_price + (profit_steps * trail_step)
+        new_steps = profit_steps
+        sl_updated = True
+    else:
+      profit_points = entry_price - current_price
+      profit_steps = int(profit_points / trail_step)
+      if profit_steps > trailing_steps:
+        new_sl = entry_price - (profit_steps * trail_step)
+        new_steps = profit_steps
+        sl_updated = True
+    if sl_updated:
+      c.execute('UPDATE auto_positions SET sl_price = ?, trailing_sl_steps = ? WHERE id = ?', (new_sl, new_steps, position_id))
+      conn.commit()
+    conn.close()
+    return new_sl, sl_updated
+  except Exception as e: logging.error(f'Update Trailing SL Error: {e}')
+  return sl_price, False
+
+def is_market_hours():
+  now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+  time_mins = now.hour * 60 + now.minute
+  return 555 <= time_mins <= 930
+
+def auto_trading_scanner():
+  while True:
+    try:
+      if not AUTO_TRADE_CONFIG['enabled'] or not is_market_hours():
+        time.sleep(60); continue
+      users = get_all_users()
+      for chat_id in users:
+        try:
+          position = get_auto_position(chat_id)
+          if position:
+            pos_id, symbol, qty, entry_price, sl_price, target_price, trade_type, opened_at = position[:8]
+            current_price = get_symbol_price(symbol)
+            if not isinstance(current_price, (int, float)): continue
+            new_sl, sl_updated = update_trailing_stop_loss(pos_id, chat_id, current_price)
+            if sl_updated:
+              profit_pct = ((new_sl - entry_price) / entry_price * 100) if trade_type == 'BUY' else ((entry_price - new_sl) / entry_price * 100)
+              msg = (f'📈 *TRAILING SL UPDATED*\n\n• *Symbol:* `{symbol}` | *Type:* `{trade_type}`\n• *Entry:* `₹{entry_price:,.2f}`\n• *Current:* `₹{current_price:,.2f}`\n• *New SL:* `₹{new_sl:,.2f}` ({profit_pct:.2f}% profit locked)\n\n💡 Profit protect ho raha hai!')
+              send_telegram_message(chat_id, msg)
+            exit_reason = None
+            if trade_type == 'BUY':
+              if current_price <= new_sl: exit_reason = 'TRAILING SL HIT'
+              elif current_price >= target_price: exit_reason = 'TARGET HIT'
+              else:
+                opened_time = datetime.strptime(opened_at, '%Y-%m-%d %H:%M:%S')
+                if (datetime.now() - opened_time).total_seconds() > AUTO_TRADE_CONFIG['cooldown_minutes'] * 60: exit_reason = 'TIME EXIT'
+            else:
+              if current_price >= new_sl: exit_reason = 'TRAILING SL HIT'
+              elif current_price <= target_price: exit_reason = 'TARGET HIT'
+              else:
+                opened_time = datetime.strptime(opened_at, '%Y-%m-%d %H:%M:%S')
+                if (datetime.now() - opened_time).total_seconds() > AUTO_TRADE_CONFIG['cooldown_minutes'] * 60: exit_reason = 'TIME EXIT'
+            if exit_reason:
+              result = close_auto_position(pos_id, chat_id, current_price, exit_reason)
+              if result:
+                pnl_emoji = '🟢' if result['pnl'] >= 0 else '🔴'
+                msg = (f'🤖 *AUTO TRADE CLOSED*\n\n• *Symbol:* `{result["symbol"]}`\n• *Type:* `{result["type"]}`\n• *Entry:* `₹{result["entry"]:,.2f}`\n• *Exit:* `₹{result["exit"]:,.2f}`\n• *P&L:* {pnl_emoji} `₹{result["pnl"]:,.2f}`\n• *Reason:* `{exit_reason}`')
+                send_telegram_message(chat_id, msg)
+          else:
+            today_trades = get_today_trades_count(chat_id)
+            if today_trades >= AUTO_TRADE_CONFIG['max_trades_per_day']: continue
+            today_pnl = get_today_pnl(chat_id)
+            if today_pnl <= -AUTO_TRADE_CONFIG['max_daily_loss']: continue
+            tr = get_live_market_trend('^NSEI')
+            current_price = tr.get('price')
+            rsi_val = tr.get('rsi', 50)
+            vwap_val = tr.get('vwap', 0)
+            if not isinstance(current_price, (int, float)): continue
+            symbol = AUTO_TRADE_CONFIG['symbol']
+            qty = AUTO_TRADE_CONFIG['quantity']
+            sl_points = AUTO_TRADE_CONFIG['sl_points']
+            target_points = AUTO_TRADE_CONFIG['target_points']
+            trade_type = None
+            sl_price = 0.0
+            target_price = 0.0
+            if current_price > vwap_val and rsi_val > 55:
+              trade_type = 'BUY'
+              sl_price = current_price - sl_points
+              target_price = current_price + target_points
+            elif current_price < vwap_val and rsi_val < 45:
+              trade_type = 'SELL'
+              sl_price = current_price + sl_points
+              target_price = current_price - target_points
+            if trade_type:
+              pos_id = open_auto_position(chat_id, symbol, qty, current_price, sl_price, target_price, trade_type)
+              if pos_id:
+                emoji = '🟢' if trade_type == 'BUY' else '🔴'
+                msg = (f'{emoji} *AUTO TRADE OPENED*\n\n• *Symbol:* `{symbol}`\n• *Type:* `{trade_type}`\n• *Quantity:* `{qty}`\n• *Entry:* `₹{current_price:,.2f}`\n• *SL:* `₹{sl_price:,.2f}` ({sl_points} pts)\n• *Target:* `₹{target_price:,.2f}` ({target_points} pts)\n• *Trailing SL:* Active (Har {AUTO_TRADE_CONFIG["trail_step_points"]} pts par)\n• *RSI:* `{rsi_val:.2f}` | *VWAP:* `{vwap_val:.2f}`')
+                send_telegram_message(chat_id, msg)
+        except Exception as e: logging.error(f'Auto Scanner User Error ({chat_id}): {e}'); continue
+    except Exception as e: logging.error(f'Auto Scanner Error: {e}')
+    time.sleep(60)
+
+def keep_alive():
+  while True:
+    try: requests.get(RENDER_URL, timeout=10)
+    except Exception as e: logging.error(f'Keep-alive ping error: {e}')
+    time.sleep(300)
+
+def background_automation_scheduler():
+  morning_sent = False
+  closing_sent = False
+  while True:
+    now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+    current_time_str = now.strftime('%H:%M')
+    users = get_all_users()
+    if current_time_str == '09:00' and not morning_sent:
+      if users:
+        tr = get_live_market_trend('^NSEI')
+        msg = (f'🌅 *GOOD MORNING! TECHNICAL BRIEFING*\n\n• *Pre-Market Nifty Ref:* `{tr["price"]}`\n• *Initial Bias:* {tr["status"]}\n• *Action:* Prepare your live setups!')
+        for c_id in users: send_telegram_message(c_id, msg); time.sleep(0.1)
+      morning_sent = True
+    elif current_time_str == '15:30' and not closing_sent:
+      if users:
+        summary_msg = get_daily_summary()
+        for c_id in users: send_telegram_message(c_id, summary_msg); time.sleep(0.1)
+      closing_sent = True
+    if current_time_str == '00:00': morning_sent = False; closing_sent = False
+    time.sleep(30)
+
+def real_time_entry_scanner():
+  global LAST_NOTIFIED_PRICE, LAST_ALERT_TIME
+  while True:
+    try:
+      current_time = time.time()
+      COOLDOWN_PERIOD = 300
+      tr = get_live_market_trend('^NSEI')
+      current_price = tr.get('price')
+      rsi_val = tr.get('rsi', 50)
+      vwap_val = tr.get('vwap', 0)
+      if isinstance(current_price, (int, float)):
+        if LAST_NOTIFIED_PRICE is None: LAST_NOTIFIED_PRICE = current_price
+        else:
+          diff = current_price - LAST_NOTIFIED_PRICE
+          if abs(diff) >= 50 and (current_time - LAST_ALERT_TIME) > COOLDOWN_PERIOD:
+            if (diff > 0 and current_price > vwap_val and rsi_val > 50) or (diff < 0 and current_price < vwap_val and rsi_val < 50):
+              move_type = f'🚀 *FAST SCALPING ALERT: UPWARD MOVE (+50+ Pts)*' if diff > 0 else f'🔻 
