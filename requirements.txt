@@ -1,8 +1,5 @@
-python-telegram-bot
-transformers
-torch
-yfinance
-feedparser
-requests
-flask
-
+Flask==3.0.0
+yfinance==0.2.38
+feedparser==6.0.11
+requests==2.31.0
+gunicorn==21.2.0
