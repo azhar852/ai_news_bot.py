@@ -5,6 +5,7 @@ import sqlite3
 import time
 import feedparser
 import requests
+import pandas as pd
 
 try:
     import yfinance as yf
@@ -41,6 +42,7 @@ def init_db():
         c.execute('CREATE TABLE IF NOT EXISTS auto_positions (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, symbol TEXT, qty INTEGER, entry_price REAL, sl_price REAL, target_price REAL, type TEXT, highest_price REAL, lowest_price REAL, trailing_sl_steps INTEGER DEFAULT 0, opened_at TEXT)')
         c.execute('CREATE TABLE IF NOT EXISTS auto_trades (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, symbol TEXT, qty INTEGER, entry_price REAL, exit_price REAL, pnl REAL, type TEXT, exit_reason TEXT, opened_at TEXT, closed_at TEXT)')
         c.execute('CREATE TABLE IF NOT EXISTS auto_daily_stats (date TEXT PRIMARY KEY, trades_count INTEGER DEFAULT 0, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0, pnl REAL DEFAULT 0.0)')
+        c.execute('CREATE TABLE IF NOT EXISTS custom_alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, symbol TEXT, target_price REAL, notified INTEGER DEFAULT 0)')
         conn.commit()
         conn.close()
     except Exception as e:
@@ -71,17 +73,12 @@ def get_all_users():
 def get_main_keyboard():
     return {
         'inline_keyboard': [
-            [{'text': '📰 News', 'callback_data': 'news'}, {'text': '⚡ Real-Time Scalp', 'callback_data': 'scalping_alert'}],
-            [{'text': '🎯 Trend Setup', 'callback_data': 'trend'}, {'text': '📊 Nifty 50', 'callback_data': 'nifty'}],
-            [{'text': '🏦 BankNifty', 'callback_data': 'banknifty'}, {'text': '📈 Sensex', 'callback_data': 'sensex'}],
+            [{'text': '📊 MTF Dashboard', 'callback_data': 'mtf'}, {'text': '📈 Advanced Indicators', 'callback_data': 'advanced'}],
+            [{'text': '⚡ Scalp Signal', 'callback_data': 'signal'}, {'text': '📰 Market News', 'callback_data': 'news'}],
+            [{'text': '📈 Live Nifty', 'callback_data': 'nifty'}, {'text': '🏦 Live BankNifty', 'callback_data': 'banknifty'}],
             [{'text': '📉 India VIX', 'callback_data': 'vix'}, {'text': '🌍 Global Markets', 'callback_data': 'global'}],
-            [{'text': '💱 USD/INR', 'callback_data': 'usdinr'}, {'text': '🥇 Gold & Silver', 'callback_data': 'metals'}],
-            [{'text': '📊 Sectors', 'callback_data': 'sectors'}, {'text': '📅 Expiry', 'callback_data': 'expiry'}],
-            [{'text': '📐 Pivots', 'callback_data': 'pivots'}, {'text': '📈 PCR', 'callback_data': 'pcr'}],
-            [{'text': '🐋 BigMoney', 'callback_data': 'bigmoney'}, {'text': '🛢️ Crude Oil', 'callback_data': 'crude_oil'}],
-            [{'text': '🤖 AI Analysis', 'callback_data': 'ai_analysis'}, {'text': '📋 Summary', 'callback_data': 'summary'}],
-            [{'text': '💰 Paper Trade', 'callback_data': 'paper_help'}, {'text': '🤖 Auto Trade', 'callback_data': 'auto_help'}],
-            [{'text': '⚙️ Support & Reg', 'callback_data': 'support'}, {'text': '⚡ Signal', 'callback_data': 'signal'}],
+            [{'text': '💰 Paper Trading', 'callback_data': 'paper_help'}, {'text': '🤖 Auto Trading', 'callback_data': 'auto_help'}],
+            [{'text': '📅 Next Expiry', 'callback_data': 'expiry'}, {'text': '⚙️ Support', 'callback_data': 'support'}],
         ]
     }
 
@@ -100,47 +97,39 @@ def answer_callback_query(callback_query_id):
     except Exception as e: logging.error(f'Answer Callback Error: {e}')
 
 def process_action(chat_id, data_action):
-    if data_action == 'news': send_telegram_message(chat_id, get_market_news())
-    elif data_action == 'scalping_alert':
-        tr = get_live_market_trend('^NSEI')
-        send_telegram_message(chat_id, f'⚡ *REAL-TIME SCALP DESK*\n\n• Current Price: `{tr["price"]}`\n• VWAP: `{tr["vwap"]}`\n• RSI (14): `{tr["rsi"]}`\n• Market Bias: {tr["status"]}\n\n💡 {tr["action"]}')
-    elif data_action == 'trend':
-        tr = get_live_market_trend('^NSEI')
-        send_telegram_message(chat_id, f'🎯 *LIVE TREND SETUP*\n\n• *Price:* `{tr["price"]}` ({tr["change"]}%)\n• *VWAP:* `{tr["vwap"]}`\n• *RSI (14):* `{tr["rsi"]}`\n• *Bias:* {tr["status"]}\n💡 {tr["action"]}')
-    elif data_action == 'nifty':
-        tr = get_live_market_trend('^NSEI')
-        send_telegram_message(chat_id, f'📊 *NIFTY 50 REAL-TIME*\n• Price: `{tr["price"]}` ({tr["change"]}%)\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n• Bias: {tr["status"]}')
-    elif data_action == 'banknifty':
-        tr = get_live_market_trend('^NSEBANK')
-        send_telegram_message(chat_id, f'🏦 *BANK NIFTY REAL-TIME*\n• Price: `{tr["price"]}` ({tr["change"]}%)\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n• Bias: {tr["status"]}')
-    elif data_action == 'sensex':
-        tr = get_live_market_trend('^BSESN')
-        send_telegram_message(chat_id, f'📈 *BSE SENSEX*\n• Price: `{tr["price"]}` ({tr["change"]}%)\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n• Bias: {tr["status"]}')
-    elif data_action == 'vix': send_telegram_message(chat_id, get_real_vix())
-    elif data_action == 'global': send_telegram_message(chat_id, get_global_markets())
-    elif data_action == 'usdinr': send_telegram_message(chat_id, get_usd_inr())
-    elif data_action == 'metals': send_telegram_message(chat_id, get_gold_silver())
-    elif data_action == 'sectors': send_telegram_message(chat_id, get_sector_performance())
-    elif data_action == 'expiry': send_telegram_message(chat_id, get_next_expiry())
-    elif data_action == 'pivots': send_telegram_message(chat_id, get_pivot_levels('^NSEI'))
-    elif data_action == 'pcr':
-        tr = get_live_market_trend('^NSEI')
-        p = analyze_pcr_data(tr)
-        send_telegram_message(chat_id, f'📈 *PCR ANALYTICS*\n• Ratio: `{p["pcr"]}`\n• Sentiment: {p["sentiment"]}')
-    elif data_action == 'bigmoney':
-        tr = get_live_market_trend('^NSEI')
-        bm = get_big_money_alert(tr)
-        send_telegram_message(chat_id, f'🐋 *SMART MONEY FLOW*\n• {bm["action"]}\n• {bm["details"]}')
-    elif data_action == 'crude_oil': send_telegram_message(chat_id, get_crude_oil_data())
-    elif data_action == 'support': send_telegram_message(chat_id, '📋 *SUPPORT & ENTERPRISE REGISTRATION*\n\n• For formal business registrations (MSME), documentation, or technical support assistance in Bhopal, contact the administrator directly through registered channels.\n\n_Status: Verified & Active_ ✅')
-    elif data_action == 'ai_analysis': send_telegram_message(chat_id, get_ai_trading_analysis('General Market Overview'))
-    elif data_action == 'summary': send_telegram_message(chat_id, get_daily_summary())
+    if data_action == 'mtf': send_telegram_message(chat_id, get_mtf_analysis('^NSEI'))
+    elif data_action == 'advanced':
+        ind = get_advanced_indicators('^NSEI')
+        if not ind: send_telegram_message(chat_id, '⚠️ Data unavailable.')
+        else:
+            sma_200_text = f'`{ind["sma_200"]}`' if ind['sma_200'] else 'N/A'
+            signals_formatted = '\n'.join([f'• {s}' for s in ind['signals']])
+            msg = (f'📊 *ADVANCED TECHNICAL ANALYSIS*\n\n💰 *Price:* `{ind["price"]}`\n\n'
+                   f'📈 *MOVING AVERAGES:*\n• EMA 9: `{ind["ema_9"]}` {"✅" if ind["price"] > ind["ema_9"] else "❌"}\n'
+                   f'• EMA 21: `{ind["ema_21"]}` {"✅" if ind["price"] > ind["ema_21"] else "❌"}\n'
+                   f'• EMA 50: `{ind["ema_50"]}` {"✅" if ind["price"] > ind["ema_50"] else "❌"}\n• SMA 200: {sma_200_text}\n\n'
+                   f'📉 *MACD:*\n• MACD: `{ind["macd_line"]}` | Signal: `{ind["signal_line"]}`\n• Histogram: `{ind["macd_histogram"]}`\n\n'
+                   f'📊 *BOLLINGER BANDS:*\n• Upper: `{ind["upper_band"]}`\n• Lower: `{ind["lower_band"]}`\n\n'
+                   f'⚡ *VOLATILITY:*\n• ATR: `{ind["atr"]}` pts\n• ADX: `{ind["adx"]}`\n\n'
+                   f'🎯 *SUPERTREND:*\n• Signal: {"🟢 BUY" if ind["supertrend"] == "BUY" else "🔴 SELL"}\n\n🔔 *SIGNALS:*\n{signals_formatted}')
+            send_telegram_message(chat_id, msg)
     elif data_action == 'signal':
         tr = get_live_market_trend('^NSEI')
-        send_telegram_message(chat_id, f'⚡ *REAL-TIME SIGNAL DESK*\n• Index Price: `{tr["price"]}`\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n• Mode: {tr["status"]}\n💡 {tr["action"]}')
-    elif data_action == 'paper_help': send_telegram_message(chat_id, '💰 *PAPER TRADING COMMANDS*\n\n• `/paper` - Check wallet balance\n• `/buy SYMBOL QTY` - Buy position\n• `/sell SYMBOL QTY` - Sell position\n• `/positions` - View open positions\n• `/close ID` - Close position\n• `/paperhistory` - View completed trades')
-    elif data_action == 'auto_help': send_telegram_message(chat_id, f'🤖 *AUTO TRADING COMMANDS*\n\n• `/autostart` - Start auto trading\n• `/autostop` - Stop auto trading\n• `/autostatus` - View current status\n• `/autostats` - View performance\n\n💡 *Current Config:*\n• SL: `{AUTO_TRADE_CONFIG["sl_points"]} pts`\n• Target: `{AUTO_TRADE_CONFIG["target_points"]} pts`\n• Trail: `{AUTO_TRADE_CONFIG["trail_step_points"]} pts`')
-def get_real_vix():
+        send_telegram_message(chat_id, f'⚡ *SCALP SIGNAL*\n• Price: `{tr["price"]}`\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n• Mode: {tr["status"]}\n💡 {tr["action"]}')
+    elif data_action == 'nifty':
+        tr = get_live_market_trend('^NSEI')
+        send_telegram_message(chat_id, f'📊 *NIFTY 50*\n• Price: `{tr["price"]}` ({tr["change"]}%)\n• VWAP: `{tr["vwap"]}` | RSI: `{tr["rsi"]}`\n• Bias: {tr["status"]}')
+    elif data_action == 'banknifty':
+        tr = get_live_market_trend('^NSEBANK')
+        send_telegram_message(chat_id, f'🏦 *BANK NIFTY*\n• Price: `{tr["price"]}` ({tr["change"]}%)\n• Bias: {tr["status"]}')
+    elif data_action == 'vix': send_telegram_message(chat_id, get_real_vix())
+    elif data_action == 'global': send_telegram_message(chat_id, get_global_markets())
+    elif data_action == 'news': send_telegram_message(chat_id, get_market_news())
+    elif data_action == 'expiry': send_telegram_message(chat_id, get_next_expiry())
+    elif data_action == 'paper_help': send_telegram_message(chat_id, '💰 *PAPER TRADING*\n\n• `/paper` - Check balance\n• `/buy SYMBOL QTY` - Buy\n• `/sell SYMBOL QTY` - Sell\n• `/positions` - View open\n• `/close ID` - Close position')
+    elif data_action == 'auto_help': send_telegram_message(chat_id, f'🤖 *AUTO TRADING*\n\n• `/autostart` - Start bot\n• `/autostop` - Stop bot\n• `/autostatus` - Check status\n\n💡 Config:\n• SL: `{AUTO_TRADE_CONFIG["sl_points"]} pts`\n• Target: `{AUTO_TRADE_CONFIG["target_points"]} pts`\n• Trail: `{AUTO_TRADE_CONFIG["trail_step_points"]} pts`')
+    elif data_action == 'support': send_telegram_message(chat_id, '📋 *SUPPORT*\n\n• For MSME registration or tech support in Bhopal, contact admin.\n\n_Status: Verified & Active_ ✅')
+        def get_real_vix():
     try:
         vix = yf.Ticker('^INDIAVIX')
         data = vix.history(period='2d', interval='1d')
@@ -149,12 +138,12 @@ def get_real_vix():
             prev_vix = round(data['Close'].iloc[-2], 2) if len(data) >= 2 else current_vix
             if prev_vix == 0: prev_vix = current_vix
             change = round(((current_vix - prev_vix) / prev_vix) * 100, 2)
-            if current_vix < 12: status = '🟢 LOW FEAR (Bullish Market Support)'
-            elif current_vix < 18: status = '🟡 MODERATE FEAR (Normal Volatility)'
-            else: status = '🔴 HIGH FEAR (Market Panic / Correction)'
-            return (f'📉 *INDIA VIX (FEAR GAUGE)*\n\n• *Current VIX:* `{current_vix}`\n• *Change:* `{change}%`\n• *Status:* {status}\n\n💡 *Tip:* Rising VIX means option premiums (CE/PE) will expand.')
+            if current_vix < 12: status = '🟢 LOW FEAR'
+            elif current_vix < 18: status = '🟡 MODERATE FEAR'
+            else: status = '🔴 HIGH FEAR'
+            return (f'📉 *INDIA VIX*\n\n• *Current:* `{current_vix}`\n• *Change:* `{change}%`\n• *Status:* {status}\n\n💡 Rising VIX = High Premiums.')
     except Exception as e: logging.error(f'VIX Error: {e}')
-    return '📉 *India VIX data currently updating.*'
+    return '📉 *India VIX data updating.*'
 
 def get_global_markets():
     markets = {'🇺🇸 Dow Jones': '^DJI', '🇺🇸 Nasdaq': '^IXIC', '🇺🇸 S&P 500': '^GSPC', '🇯🇵 Nikkei': '^N225', '🇭🇰 Hang Seng': '^HSI', '🇬🇧 FTSE': '^FTSE', '🇩🇪 DAX': '^GDAXI'}
@@ -183,9 +172,9 @@ def get_usd_inr():
             if prev == 0: prev = current
             change = round(((current - prev) / prev) * 100, 2)
             status = '🟢 RUPEE STRONGER' if change < 0 else '🔴 RUPEE WEAKER'
-            return (f'💱 *USD/INR CURRENCY LIVE*\n\n• *Rate:* `₹{current}`\n• *Change:* `{change}%`\n• *Status:* {status}\n\n💡 *Impact:* Weak rupee is generally negative for domestic equity inflows.')
+            return (f'💱 *USD/INR*\n\n• *Rate:* `₹{current}`\n• *Change:* `{change}%`\n• *Status:* {status}')
     except Exception as e: logging.error(f'USD/INR Error: {e}')
-    return '💱 *USD/INR Data currently updating.*'
+    return '💱 *USD/INR Data updating.*'
 
 def get_gold_silver():
     try:
@@ -195,13 +184,13 @@ def get_gold_silver():
         silver_data = silver.history(period='2d', interval='1d')
         gold_price = round(gold_data['Close'].iloc[-1], 2) if not gold_data.empty else 0
         silver_price = round(silver_data['Close'].iloc[-1], 2) if not silver_data.empty else 0
-        return (f'🥇 *PRECIOUS METALS (GLOBAL SPOT)*\n\n• *Gold (USD/oz):* `${gold_price}`\n• *Silver (USD/oz):* `${silver_price}`\n\n💡 *Note:* Safe-haven asset tracking for global inflation cues.')
+        return (f'🥇 *PRECIOUS METALS*\n\n• *Gold:* `${gold_price}`\n• *Silver:* `${silver_price}`')
     except Exception as e: logging.error(f'Gold/Silver Error: {e}')
-    return '🥇 *Precious Metals data updating.*'
+    return '🥇 *Metals data updating.*'
 
 def get_sector_performance():
     sectors = {'🏦 Nifty Bank': '^NSEBANK', '💻 Nifty IT': '^CNXIT', '🚗 Nifty Auto': '^CNXAUTO', '💊 Nifty Pharma': '^CNXPHARMA', '🏗️ Nifty Metal': '^CNXMETAL', '⚡ Nifty Energy': '^CNXENERGY'}
-    msg = '📊 *SECTOR PERFORMANCE TODAY*\n\n'
+    msg = '📊 *SECTOR PERFORMANCE*\n\n'
     for name, symbol in sectors.items():
         try:
             ticker = yf.Ticker(symbol)
@@ -222,23 +211,23 @@ def get_next_expiry():
     if days_ahead <= 0: days_ahead += 7
     next_thursday = today + timedelta(days=days_ahead)
     days_left = (next_thursday - today).days
-    return (f'📅 *OPTIONS EXPIRY CALENDAR*\n\n• *Next Weekly Expiry:* `{next_thursday.strftime("%d %b %Y")}`\n• *Days Remaining:* `{days_left}` Days\n\n💡 *Tip:* Avoid holding naked options close to expiry due to rapid Theta Decay.')
+    return (f'📅 *OPTIONS EXPIRY*\n\n• *Next Weekly:* `{next_thursday.strftime("%d %b %Y")}`\n• *Days Left:* `{days_left}`\n\n💡 Avoid holding naked options near expiry.')
 
 def get_market_news():
     try:
         rss_url = 'https://news.google.com/rss/search?q=Indian+Stock+Market+Nifty+Sensex&hl=en-IN&gl=IN&ceid=IN:en'
         feed = feedparser.parse(rss_url)
         if feed.entries and len(feed.entries) > 0:
-            msg = '📰 *24/7 LATEST MARKET & FINANCIAL NEWS*\n\n'
+            msg = '📰 *LATEST MARKET NEWS*\n\n'
             for entry in feed.entries[:4]:
                 title = entry.get('title', 'Market News')
                 link = entry.get('link', '')
-                source = entry.get('source', {}).get('title', 'Financial Express') if 'source' in entry else 'News Update'
+                source = entry.get('source', {}).get('title', 'News') if 'source' in entry else 'News'
                 if ' - ' in title: title = title.rsplit(' - ', 1)[0]
                 msg += f'• [{title}]({link})\n  _Source: {source}_\n\n'
             return msg
     except Exception as e: logging.error(f'RSS News Fetch Error: {e}')
-    return '📰 *LATEST MARKET NEWS*\n\n• Headlines currently updating.'
+    return '📰 *News updating.*'
 
 def get_crude_oil_data():
     try:
@@ -249,10 +238,10 @@ def get_crude_oil_data():
             prev_price = round(data['Close'].iloc[-2], 2) if len(data) >= 2 else current_price
             if prev_price == 0: prev_price = current_price
             change = round(((current_price - prev_price) / prev_price) * 100, 2)
-            status = '🟢 BULLISH / RISING' if change >= 0 else '🔴 BEARISH / FALLING'
-            return (f'🛢️ *CRUDE OIL LIVE MARKET*\n\n• *Price:* `${current_price}`\n• *Change:* `{change}%`\n• *Trend:* {status}\n\n💡 *Market Impact:* High crude prices increase inflation and put pressure on indices.')
+            status = '🟢 BULLISH' if change >= 0 else '🔴 BEARISH'
+            return (f'🛢️ *CRUDE OIL*\n\n• *Price:* `${current_price}`\n• *Change:* `{change}%`\n• *Trend:* {status}')
     except Exception as e: logging.error(f'Crude Fetch Error: {e}')
-    return '🛢️ *CRUDE OIL*\n\n• Live data currently updating.'
+    return '🛢️ *Crude Oil updating.*'
 
 def calculate_rsi(data, window=14):
     try:
@@ -286,17 +275,11 @@ def get_live_market_trend(symbol='^NSEI'):
             if open_price == 0: open_price = current_price
             change_pct = round(((current_price - open_price) / open_price) * 100, 2)
             if current_price > vwap_val and rsi_val > 50:
-                status = '🟢 BULLISH (Upward Momentum)'
-                action = 'Price is above VWAP with RSI > 50. Look for Call (CE) opportunities.'
-                bias = 'BULLISH'
+                status, action, bias = '🟢 BULLISH', 'Price > VWAP & RSI > 50. Look for Calls.', 'BULLISH'
             elif current_price < vwap_val and rsi_val < 50:
-                status = '🔴 BEARISH (Downward Momentum)'
-                action = 'Price is below VWAP with RSI < 50. Look for Put (PE) opportunities.'
-                bias = 'BEARISH'
+                status, action, bias = '🔴 BEARISH', 'Price < VWAP & RSI < 50. Look for Puts.', 'BEARISH'
             else:
-                status = '⚖️ CONSOLIDATION / SIDEWAYS'
-                action = 'Market is hovering around VWAP. Wait for a clear breakout.'
-                bias = 'SIDEWAYS'
+                status, action, bias = '⚖️ SIDEWAYS', 'Market hovering near VWAP. Wait for breakout.', 'SIDEWAYS'
             return {'price': current_price, 'change': change_pct, 'rsi': rsi_val, 'vwap': vwap_val, 'status': status, 'action': action, 'bias': bias}
     except Exception as e: logging.error(f'Live Market Trend Error (1m) for {symbol}: {e}')
     try:
@@ -304,15 +287,9 @@ def get_live_market_trend(symbol='^NSEI'):
         data = ticker.history(period='5d', interval='15m')
         if len(data) >= 2:
             current_price = round(data['Close'].iloc[-1], 2)
-            return {'price': current_price, 'change': 0.0, 'rsi': 50.0, 'vwap': current_price, 'status': '⚖️ LIVE DATA (15m)', 'action': 'Market is active. Check chart for exact levels.', 'bias': 'NEUTRAL'}
+            return {'price': current_price, 'change': 0.0, 'rsi': 50.0, 'vwap': current_price, 'status': '⚖️ LIVE DATA (15m)', 'action': 'Check chart for levels.', 'bias': 'NEUTRAL'}
     except Exception as e: logging.error(f'Fallback Trend Error (15m): {e}')
-    try:
-        data = yf.download(symbol, period='2d', interval='1d', progress=False)
-        if not data.empty and len(data) >= 1:
-            current_price = round(data['Close'].iloc[-1], 2)
-            return {'price': current_price, 'change': 0.0, 'rsi': 50.0, 'vwap': current_price, 'status': '⚖️ LIVE DATA (Daily)', 'action': 'Market data available. Check chart for intraday levels.', 'bias': 'NEUTRAL'}
-    except Exception as e: logging.error(f'Final Fallback Error: {e}')
-    return {'price': 'N/A', 'change': 0.0, 'rsi': 50.0, 'vwap': 0.0, 'status': '⚖️ MARKET CHECK IN PROGRESS', 'action': 'Verify with chart indicators.', 'bias': 'NEUTRAL'}
+    return {'price': 'N/A', 'change': 0.0, 'rsi': 50.0, 'vwap': 0.0, 'status': '⚖️ MARKET CHECK IN PROGRESS', 'action': 'Verify with chart.', 'bias': 'NEUTRAL'}
 
 def get_pivot_levels(symbol='^NSEI'):
     try:
@@ -324,33 +301,126 @@ def get_pivot_levels(symbol='^NSEI'):
             pivot = (high + low + close) / 3
             r1, s1 = (2 * pivot) - low, (2 * pivot) - high
             r2, s2 = pivot + (high - low), pivot - (high - low)
-            return (f'📐 *AUTOMATIC PIVOT & S/R LEVELS*\n\n• *Pivot Point:* `{round(pivot, 2)}`\n• *Resistance 1 (R1):* `{round(r1, 2)}`\n• *Resistance 2 (R2):* `{round(r2, 2)}`\n• *Support 1 (S1):* `{round(s1, 2)}`\n• *Support 2 (S2):* `{round(s2, 2)}`\n\n💡 *Usage:* Trade breakouts above R1 or bounces near S1.')
+            return (f'📐 *PIVOT & S/R LEVELS*\n\n• *Pivot:* `{round(pivot, 2)}`\n• *R1:* `{round(r1, 2)}`\n• *R2:* `{round(r2, 2)}`\n• *S1:* `{round(s1, 2)}`\n• *S2:* `{round(s2, 2)}`')
     except Exception as e: logging.error(f'Pivot Error: {e}')
-    return '📐 *Pivot Levels calculation currently updating.*'
+    return '📐 *Pivot Levels updating.*'
 
 def analyze_pcr_data(tr=None):
     if not tr: tr = get_live_market_trend('^NSEI')
-    if tr['bias'] == 'BEARISH': return {'pcr': 0.75, 'sentiment': '🔴 BEARISH / CALL WRITING HEAVY', 'details': 'Call Writers building resistance.'}
-    elif tr['bias'] == 'BULLISH': return {'pcr': 1.25, 'sentiment': '🟢 BULLISH / PUT WRITING DOMINANT', 'details': 'Put Writers supporting down levels.'}
-    return {'pcr': 1.00, 'sentiment': '⚖️ NEUTRAL / RANGEBOUND', 'details': 'Balanced OI buildup.'}
+    if tr['bias'] == 'BEARISH': return {'pcr': 0.75, 'sentiment': '🔴 BEARISH / CALL WRITING'}
+    elif tr['bias'] == 'BULLISH': return {'pcr': 1.25, 'sentiment': '🟢 BULLISH / PUT WRITING'}
+    return {'pcr': 1.00, 'sentiment': '⚖️ NEUTRAL'}
 
 def get_big_money_alert(tr=None):
     if not tr: tr = get_live_market_trend('^NSEI')
-    if tr['bias'] == 'BEARISH': return {'action': '🔴 HEAVY FII OUTFLOW (SELLING)', 'details': 'FII net selling observed in Index Futures.'}
-    elif tr['bias'] == 'BULLISH': return {'action': '🟢 HEAVY FII INFLOW (BUYING)', 'details': 'FII strong net buying observed.'}
-    return {'action': '⚖️ NEUTRAL FLOW', 'details': 'Mixed institutional activity.'}
+    if tr['bias'] == 'BEARISH': return {'action': '🔴 FII OUTFLOW', 'details': 'Net selling in Index Futures.'}
+    elif tr['bias'] == 'BULLISH': return {'action': '🟢 FII INFLOW', 'details': 'Strong net buying observed.'}
+    return {'action': '⚖️ NEUTRAL FLOW', 'details': 'Mixed activity.'}
 
 def get_daily_summary():
     tr = get_live_market_trend('^NSEI')
     pcr = analyze_pcr_data(tr)
     bm = get_big_money_alert(tr)
-    return (f'📊 *DAILY MARKET SUMMARY & TECHNICAL REPORT*\n\n• *Nifty Price:* `{tr["price"]}` ({tr["change"]}%)\n• *VWAP:* `{tr["vwap"]}` | *RSI:* `{tr["rsi"]}`\n• *Overall Trend Bias:* {tr["status"]}\n• *Derivatives Sentiment:* {pcr["sentiment"]}\n• *Institutional Flow:* {bm["action"]}\n\n💡 *Next Session Plan:* {tr["action"]}')
+    return (f'📊 *DAILY SUMMARY*\n\n• *Nifty:* `{tr["price"]}` ({tr["change"]}%)\n• *VWAP:* `{tr["vwap"]}` | *RSI:* `{tr["rsi"]}`\n• *Bias:* {tr["status"]}\n• *PCR:* {pcr["sentiment"]}\n• *FII:* {bm["action"]}\n\n💡 {tr["action"]}')
 
 def get_ai_trading_analysis(query):
     tr = get_live_market_trend('^NSEI')
     pcr = analyze_pcr_data(tr)
     bm = get_big_money_alert(tr)
-    return (f'🤖 *AI TECHNICAL ASSISTANT*\n\n• *Query:* _{query}_\n• *Nifty Live:* `{tr["price"]}` ({tr["change"]}%)\n• *VWAP:* `{tr["vwap"]}` | *RSI:* `{tr["rsi"]}`\n• *Market Bias:* {tr["status"]}\n• *Smart Money:* {bm["action"]}\n\n💡 *Recommendation:* {tr["action"]}')
+    return (f'🤖 *AI ANALYSIS*\n\n• *Query:* _{query}_\n• *Nifty:* `{tr["price"]}` ({tr["change"]}%)\n• *VWAP:* `{tr["vwap"]}` | *RSI:* `{tr["rsi"]}`\n• *Bias:* {tr["status"]}\n• *Smart Money:* {bm["action"]}\n\n💡 {tr["action"]}')
+def get_advanced_indicators(symbol='^NSEI'):
+    try:
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(period='3mo', interval='1d')
+        if len(data) < 50: return None
+        current_price = round(data['Close'].iloc[-1], 2)
+        ema_9 = round(data['Close'].ewm(span=9).mean().iloc[-1], 2)
+        ema_21 = round(data['Close'].ewm(span=21).mean().iloc[-1], 2)
+        ema_50 = round(data['Close'].ewm(span=50).mean().iloc[-1], 2)
+        sma_200 = round(data['Close'].rolling(window=200).mean().iloc[-1], 2) if len(data) >= 200 else None
+        ema_12 = data['Close'].ewm(span=12).mean()
+        ema_26 = data['Close'].ewm(span=26).mean()
+        macd_line = round(ema_12.iloc[-1] - ema_26.iloc[-1], 2)
+        signal_line = round((ema_12 - ema_26).ewm(span=9).mean().iloc[-1], 2)
+        macd_histogram = round(macd_line - signal_line, 2)
+        sma_20 = data['Close'].rolling(window=20).mean().iloc[-1]
+        std_20 = data['Close'].rolling(window=20).std().iloc[-1]
+        upper_band = round(sma_20 + (2 * std_20), 2)
+        lower_band = round(sma_20 - (2 * std_20), 2)
+        high_low = data['High'] - data['Low']
+        high_close = (data['High'] - data['Close'].shift()).abs()
+        low_close = (data['Low'] - data['Close'].shift()).abs()
+        tr_data = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = round(tr_data.rolling(window=14).mean().iloc[-1], 2)
+        plus_dm = data['High'].diff()
+        minus_dm = -data['Low'].diff()
+        plus_dm[plus_dm < 0] = 0
+        minus_dm[minus_dm < 0] = 0
+        atr_14 = tr_data.rolling(window=14).mean()
+        plus_di = 100 * (plus_dm.rolling(window=14).mean() / atr_14)
+        minus_di = 100 * (minus_dm.rolling(window=14).mean() / atr_14)
+        dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di))
+        adx = round(dx.rolling(window=14).mean().iloc[-1], 2)
+        atr_10 = tr_data.rolling(window=10).mean().iloc[-1]
+        hl_avg = (data['High'] + data['Low']) / 2
+        upper_st = round(hl_avg.iloc[-1] + (3 * atr_10), 2)
+        lower_st = round(hl_avg.iloc[-1] - (3 * atr_10), 2)
+        supertrend_signal = 'BUY' if current_price > lower_st else 'SELL'
+        signals = []
+        if current_price > ema_9 > ema_21 > ema_50: signals.append('🟢 Strong Uptrend')
+        elif current_price < ema_9 < ema_21 < ema_50: signals.append('🔴 Strong Downtrend')
+        if macd_line > signal_line: signals.append('🟢 MACD Bullish')
+        else: signals.append('🔴 MACD Bearish')
+        if current_price > upper_band: signals.append('⚠️ Overbought')
+        elif current_price < lower_band: signals.append('⚠️ Oversold')
+        if adx > 25: signals.append(f'💪 Strong Trend (ADX: {adx})')
+        else: signals.append(f'😴 Weak Trend (ADX: {adx})')
+        return {'price': current_price, 'ema_9': ema_9, 'ema_21': ema_21, 'ema_50': ema_50, 'sma_200': sma_200, 'macd_line': macd_line, 'signal_line': signal_line, 'macd_histogram': macd_histogram, 'upper_band': upper_band, 'lower_band': lower_band, 'atr': atr, 'adx': adx, 'supertrend': supertrend_signal, 'supertrend_upper': upper_st, 'supertrend_lower': lower_st, 'signals': signals}
+    except Exception as e:
+        logging.error(f'Advanced Indicators Error: {e}')
+        return None
+
+def get_mtf_analysis(symbol='^NSEI'):
+    try:
+        ticker = yf.Ticker(symbol)
+        data_5m = ticker.history(period='1d', interval='5m')
+        data_15m = ticker.history(period='5d', interval='15m')
+        data_1h = ticker.history(period='1mo', interval='1h')
+        data_1d = ticker.history(period='6mo', interval='1d')
+
+        def get_trend(data, ema_short=9, ema_long=21):
+            if len(data) < ema_long: return '⚪ Neutral', 'N/A'
+            current = data['Close'].iloc[-1]
+            ema_s = data['Close'].ewm(span=ema_short).mean().iloc[-1]
+            ema_l = data['Close'].ewm(span=ema_long).mean().iloc[-1]
+            if current > ema_s > ema_l: return '🟢 Strong Buy', f'{current:.2f}'
+            elif current < ema_s < ema_l: return '🔴 Strong Sell', f'{current:.2f}'
+            else: return '🟡 Sideways', f'{current:.2f}'
+
+        t5m, p5m = get_trend(data_5m)
+        t15m, p15m = get_trend(data_15m)
+        t1h, p1h = get_trend(data_1h)
+        t1d, p1d = get_trend(data_1d)
+
+        trends = [t5m, t15m, t1h, t1d]
+        buys = trends.count('🟢 Strong Buy')
+        sells = trends.count('🔴 Strong Sell')
+
+        if buys >= 3: overall = '🚀 STRONG UPTREND'
+        elif sells >= 3: overall = '🔻 STRONG DOWNTREND'
+        else: overall = '⚖️ MIXED / SIDEWAYS'
+
+        return (f"📊 *MULTI-TIMEFRAME DASHBOARD*\n\n"
+                f"⏱️ *5 Min (Scalping):* {t5m} (`{p5m}`)\n"
+                f"⏱️ *15 Min (Intraday):* {t15m} (`{p15m}`)\n"
+                f"⏱️ *1 Hour (Swing):* {t1h} (`{p1h}`)\n"
+                f"⏱️ *1 Day (Positional):* {t1d} (`{p1d}`)\n\n"
+                f"🎯 *OVERALL SIGNAL:* {overall}\n"
+                f"💡 *Trend Score:* {buys} Buy vs {sells} Sell")
+    except Exception as e:
+        logging.error(f'MTF Error: {e}')
+        return '⚠️ MTF Data unavailable.'
+
 def init_paper_wallet(chat_id):
     try:
         conn = get_db_connection()
@@ -430,8 +500,7 @@ def get_symbol_price(symbol):
     yf_symbol = symbol_map.get(symbol.upper(), symbol)
     tr = get_live_market_trend(yf_symbol)
     return tr.get('price')
-
-def get_auto_position(chat_id):
+ def get_auto_position(chat_id):
     try:
         conn = get_db_connection()
         row = conn.cursor().execute('SELECT id, symbol, qty, entry_price, sl_price, target_price, type, opened_at FROM auto_positions WHERE chat_id = ? LIMIT 1', (chat_id,)).fetchone()
@@ -508,23 +577,17 @@ def update_trailing_stop_loss(position_id, chat_id, current_price):
         if not row: conn.close(); return None, False
         entry_price, sl_price, target_price, trade_type, trailing_steps = row
         trail_step = AUTO_TRADE_CONFIG['trail_step_points']
-        sl_updated = False
-        new_sl = sl_price
-        new_steps = trailing_steps
+        sl_updated, new_sl, new_steps = False, sl_price, trailing_steps
         if trade_type == 'BUY':
             profit_points = current_price - entry_price
             profit_steps = int(profit_points / trail_step)
             if profit_steps > trailing_steps:
-                new_sl = entry_price + (profit_steps * trail_step)
-                new_steps = profit_steps
-                sl_updated = True
+                new_sl, new_steps, sl_updated = entry_price + (profit_steps * trail_step), profit_steps, True
         else:
             profit_points = entry_price - current_price
             profit_steps = int(profit_points / trail_step)
             if profit_steps > trailing_steps:
-                new_sl = entry_price - (profit_steps * trail_step)
-                new_steps = profit_steps
-                sl_updated = True
+                new_sl, new_steps, sl_updated = entry_price - (profit_steps * trail_step), profit_steps, True
         if sl_updated:
             c.execute('UPDATE auto_positions SET sl_price = ?, trailing_sl_steps = ? WHERE id = ?', (new_sl, new_steps, position_id))
             conn.commit()
@@ -532,6 +595,7 @@ def update_trailing_stop_loss(position_id, chat_id, current_price):
         return new_sl, sl_updated
     except Exception as e: logging.error(f'Update Trailing SL Error: {e}')
     return sl_price, False
+
 def is_market_hours():
     now = datetime.utcnow() + timedelta(hours=5, minutes=30)
     time_mins = now.hour * 60 + now.minute
@@ -584,21 +648,13 @@ def auto_trading_scanner():
                         rsi_val = tr.get('rsi', 50)
                         vwap_val = tr.get('vwap', 0)
                         if not isinstance(current_price, (int, float)): continue
-                        symbol = AUTO_TRADE_CONFIG['symbol']
-                        qty = AUTO_TRADE_CONFIG['quantity']
-                        sl_points = AUTO_TRADE_CONFIG['sl_points']
-                        target_points = AUTO_TRADE_CONFIG['target_points']
-                        trade_type = None
-                        sl_price = 0.0
-                        target_price = 0.0
+                        symbol, qty = AUTO_TRADE_CONFIG['symbol'], AUTO_TRADE_CONFIG['quantity']
+                        sl_points, target_points = AUTO_TRADE_CONFIG['sl_points'], AUTO_TRADE_CONFIG['target_points']
+                        trade_type, sl_price, target_price = None, 0.0, 0.0
                         if current_price > vwap_val and rsi_val > 55:
-                            trade_type = 'BUY'
-                            sl_price = current_price - sl_points
-                            target_price = current_price + target_points
+                            trade_type, sl_price, target_price = 'BUY', current_price - sl_points, current_price + target_points
                         elif current_price < vwap_val and rsi_val < 45:
-                            trade_type = 'SELL'
-                            sl_price = current_price + sl_points
-                            target_price = current_price - target_points
+                            trade_type, sl_price, target_price = 'SELL', current_price + sl_points, current_price - target_points
                         if trade_type:
                             pos_id = open_auto_position(chat_id, symbol, qty, current_price, sl_price, target_price, trade_type)
                             if pos_id:
@@ -616,8 +672,7 @@ def keep_alive():
         time.sleep(300)
 
 def background_automation_scheduler():
-    morning_sent = False
-    closing_sent = False
+    morning_sent, closing_sent = False, False
     while True:
         now = datetime.utcnow() + timedelta(hours=5, minutes=30)
         current_time_str = now.strftime('%H:%M')
@@ -625,7 +680,7 @@ def background_automation_scheduler():
         if current_time_str == '09:00' and not morning_sent:
             if users:
                 tr = get_live_market_trend('^NSEI')
-                msg = (f'🌅 *GOOD MORNING! TECHNICAL BRIEFING*\n\n• *Pre-Market Nifty Ref:* `{tr["price"]}`\n• *Initial Bias:* {tr["status"]}\n• *Action:* Prepare your live setups!')
+                msg = (f'🌅 *GOOD MORNING!*\n\n• *Pre-Market Nifty:* `{tr["price"]}`\n• *Bias:* {tr["status"]}\n• *Action:* Prepare setups!')
                 for c_id in users: send_telegram_message(c_id, msg); time.sleep(0.1)
             morning_sent = True
         elif current_time_str == '15:30' and not closing_sent:
@@ -633,7 +688,7 @@ def background_automation_scheduler():
                 summary_msg = get_daily_summary()
                 for c_id in users: send_telegram_message(c_id, summary_msg); time.sleep(0.1)
             closing_sent = True
-        if current_time_str == '00:00': morning_sent = False; closing_sent = False
+        if current_time_str == '00:00': morning_sent, closing_sent = False, False
         time.sleep(30)
 
 def real_time_entry_scanner():
@@ -652,12 +707,87 @@ def real_time_entry_scanner():
                     diff = current_price - LAST_NOTIFIED_PRICE
                     if abs(diff) >= 50 and (current_time - LAST_ALERT_TIME) > COOLDOWN_PERIOD:
                         if (diff > 0 and current_price > vwap_val and rsi_val > 50) or (diff < 0 and current_price < vwap_val and rsi_val < 50):
-                            move_type = f'🚀 *FAST SCALPING ALERT: UPWARD MOVE (+50+ Pts)*' if diff > 0 else f'🔻 *FAST SCALPING ALERT: DOWNWARD MOVE (-50+ Pts)*'
+                            move_type = f'🚀 *FAST MOVE: UP (+50+ Pts)*' if diff > 0 else f'🔻 *FAST MOVE: DOWN (-50+ Pts)*'
                             users = get_all_users()
                             if users:
-                                msg = (f'{move_type}\n\n• *Previous Ref:* `{LAST_NOTIFIED_PRICE}`\n• *Current Price:* `{current_price}`\n• *Net Move:* `{round(diff, 2)} Points`\n• *VWAP:* `{vwap_val}` | *RSI:* `{rsi_val}`\n• *Market Bias:* {tr["status"]}\n\n💡 *Action:* {tr["action"]}')
+                                msg = (f'{move_type}\n\n• *Ref:* `{LAST_NOTIFIED_PRICE}`\n• *Current:* `{current_price}`\n• *Move:* `{round(diff, 2)} Pts`\n• *VWAP:* `{vwap_val}` | *RSI:* `{rsi_val}`\n• *Bias:* {tr["status"]}\n\n💡 {tr["action"]}')
                                 for c_id in users: send_telegram_message(c_id, msg); time.sleep(0.1)
-                            LAST_NOTIFIED_PRICE = current_price
-                            LAST_ALERT_TIME = current_time
+                            LAST_NOTIFIED_PRICE, LAST_ALERT_TIME = current_price, current_time
         except Exception as e: logging.error(f'Real-Time Scanner Error: {e}')
         time.sleep(30)
+
+LAST_ADVANCED_STATE = {'supertrend': None, 'adx_strong': False}
+
+def advanced_indicator_scanner():
+    while True:
+        try:
+            if not is_market_hours(): time.sleep(300); continue
+            ind = get_advanced_indicators('^NSEI')
+            if not ind: time.sleep(300); continue
+            users = get_all_users()
+            if not users: time.sleep(300); continue
+            current_st = ind['supertrend']
+            if LAST_ADVANCED_STATE['supertrend'] != current_st:
+                if LAST_ADVANCED_STATE['supertrend'] is not None:
+                    emoji, action = ('🟢', 'BUY') if current_st == 'BUY' else ('🔴', 'SELL')
+                    msg = (f'🚨 *SUPERTREND FLIP*\n\n• Symbol: NIFTY\n• New Signal: {emoji} {action}\n• Price: `{ind["price"]}`\n• Upper: `{ind["supertrend_upper"]}`\n• Lower: `{ind["supertrend_lower"]}`\n\n💡 {"Long positions consider karein" if current_st == "BUY" else "Short/Exit consider karein"}')
+                    for uid in users: send_telegram_message(uid, msg); time.sleep(0.5)
+                LAST_ADVANCED_STATE['supertrend'] = current_st
+            if ind['adx'] > 25 and not LAST_ADVANCED_STATE['adx_strong']:
+                msg = (f'💪 *STRONG TREND DETECTED*\n\n• ADX: `{ind["adx"]}` (>25)\n• Price: `{ind["price"]}`\n• Supertrend: {ind["supertrend"]}\n\n💡 Strong momentum detected!')
+                for uid in users: send_telegram_message(uid, msg); time.sleep(0.5)
+                LAST_ADVANCED_STATE['adx_strong'] = True
+            elif ind['adx'] <= 25:
+                LAST_ADVANCED_STATE['adx_strong'] = False
+            time.sleep(300)
+        except Exception as e: logging.error(f'Advanced Scanner Error: {e}'); time.sleep(300)
+
+def set_custom_alert(chat_id, symbol, target_price):
+    try:
+        conn = get_db_connection()
+        conn.cursor().execute('INSERT INTO custom_alerts (chat_id, symbol, target_price) VALUES (?, ?, ?)', (chat_id, symbol, target_price))
+        conn.commit()
+        conn.close()
+    except Exception as e: logging.error(f'Set Alert Error: {e}')
+
+def delete_custom_alert(chat_id, symbol):
+    try:
+        conn = get_db_connection()
+        conn.cursor().execute('DELETE FROM custom_alerts WHERE chat_id = ? AND symbol = ?', (chat_id, symbol))
+        conn.commit()
+        conn.close()
+    except Exception as e: logging.error(f'Delete Alert Error: {e}')
+
+def get_custom_alerts(chat_id):
+    try:
+        conn = get_db_connection()
+        rows = conn.cursor().execute('SELECT id, symbol, target_price FROM custom_alerts WHERE chat_id = ?', (chat_id,)).fetchall()
+        conn.close()
+        return rows
+    except Exception as e: logging.error(f'Get Alerts Error: {e}')
+    return []
+
+def custom_alert_scanner():
+    while True:
+        try:
+            conn = get_db_connection()
+            alerts = conn.cursor().execute('SELECT id, chat_id, symbol, target_price, notified FROM custom_alerts').fetchall()
+            conn.close()
+            if not alerts: time.sleep(60); continue
+            for alert_id, chat_id, symbol, target_price, notified in alerts:
+                try:
+                    symbol_map = {'NIFTY': '^NSEI', 'BANKNIFTY': '^NSEBANK', 'SENSEX': '^BSESN'}
+                    yf_symbol = symbol_map.get(symbol.upper(), symbol)
+                    tr = get_live_market_trend(yf_symbol)
+                    current_price = tr.get('price')
+                    if isinstance(current_price, (int, float)):
+                        if notified == 0 and current_price >= target_price:
+                            msg = f'🔔 *ALERT TRIGGERED!*\n\n• `{symbol}` crossed `{target_price}`\n• Current Price: `{current_price}`'
+                            send_telegram_message(chat_id, msg)
+                            conn = get_db_connection()
+                            conn.cursor().execute('UPDATE custom_alerts SET notified = 1 WHERE id = ?', (alert_id,))
+                            conn.commit()
+                            conn.close()
+                except Exception as e: logging.error(f'Alert Check Error for {symbol}: {e}')
+            time.sleep(60)
+        except Exception as e: logging.error(f'Custom Alert Scanner Error: {e}'); time.sleep(60)   
