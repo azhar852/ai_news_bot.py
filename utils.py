@@ -172,8 +172,8 @@ def process_action(chat_id, data_action):
         send_telegram_message(chat_id, f'🤖 *AUTO TRADING*\n\n• `/autostart` - Start bot\n• `/autostop` - Stop bot\n• `/autostatus` - Check status\n\n💡 Config:\n• SL: `{AUTO_TRADE_CONFIG["sl_points"]} pts`\n• Target: `{AUTO_TRADE_CONFIG["target_points"]} pts`\n• Trail: `{AUTO_TRADE_CONFIG["trail_step_points"]} pts`')
     elif data_action == 'support':
         send_telegram_message(chat_id, '📋 *SUPPORT*\n\n• For MSME registration or tech support in Bhopal, contact admin.\n\n_Status: Verified & Active_ ✅')
-    def get_real_vix():
-    try:
+def get_real_vix():
+        try:
         vix = yf.Ticker('^INDIAVIX')
         data = vix.history(period='2d', interval='1d')
         if not data.empty:
