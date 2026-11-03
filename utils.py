@@ -500,7 +500,7 @@ def get_symbol_price(symbol):
     yf_symbol = symbol_map.get(symbol.upper(), symbol)
     tr = get_live_market_trend(yf_symbol)
     return tr.get('price')
- def get_auto_position(chat_id):
+def get_auto_position(chat_id):
     try:
         conn = get_db_connection()
         row = conn.cursor().execute('SELECT id, symbol, qty, entry_price, sl_price, target_price, type, opened_at FROM auto_positions WHERE chat_id = ? LIMIT 1', (chat_id,)).fetchone()
