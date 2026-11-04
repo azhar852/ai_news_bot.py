@@ -30,11 +30,9 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-
 @app.route('/')
 def home():
     return 'Ultimate Pro Trading Bot Active!'
-
 
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
@@ -71,7 +69,6 @@ def telegram_webhook():
         text_lower = text.lower()
 
         if chat_id:
-
             if text_lower in ['/start', 'start']:
                 msg = '🚀 *ULTIMATE PRO TRADING BOT*\n\n'
                 msg += 'Welcome! Institutional-grade data.\n\n'
@@ -231,28 +228,21 @@ def telegram_webhook():
 
             elif text_lower in ['/vix', '/india_vix']:
                 send_telegram_message(chat_id, get_real_vix())
-
             elif text_lower in ['/global', '/world']:
                 send_telegram_message(chat_id, get_global_markets())
-
             elif text_lower in ['/usdinr', '/dollar']:
                 send_telegram_message(chat_id, get_usd_inr())
-
             elif text_lower in ['/metals', '/gold']:
                 send_telegram_message(chat_id, get_gold_silver())
-
             elif text_lower in ['/sectors', '/sector']:
                 send_telegram_message(chat_id, get_sector_performance())
-
             elif text_lower in ['/expiry', '/expiration']:
                 send_telegram_message(chat_id, get_next_expiry())
-
             elif text_lower == '/news':
                 send_telegram_message(chat_id, get_market_news())
-
             elif text_lower == '/ai_analysis':
                 send_telegram_message(chat_id, get_ai_trading_analysis('General Market Overview'))
-
+            
             elif text_lower in ['/trend', '/market']:
                 tr = get_live_market_trend('^NSEI')
                 msg = '🎯 *LIVE TREND*\n'
@@ -286,33 +276,28 @@ def telegram_webhook():
 
             elif text_lower == '/pivots':
                 send_telegram_message(chat_id, get_pivot_levels('^NSEI'))
-
             elif text_lower == '/pcr':
                 p = analyze_pcr_data()
                 msg = '📈 *PCR*\n'
                 msg += '• Value: `' + str(p['pcr']) + '`\n'
                 msg += '• Sentiment: ' + p['sentiment']
                 send_telegram_message(chat_id, msg)
-
             elif text_lower == '/bigmoney':
                 bm = get_big_money_alert()
                 msg = '🐋 *SMART MONEY*\n'
                 msg += '• ' + bm['action'] + '\n'
                 msg += '• ' + bm['details']
                 send_telegram_message(chat_id, msg)
-
             elif text_lower == '/commodity':
                 send_telegram_message(chat_id, get_crude_oil_data())
-
             elif text_lower == '/support':
                 msg = '📋 *SUPPORT*\n\n'
                 msg += '• For MSME registration or tech support in Bhopal, contact admin.\n\n'
                 msg += '_Status: Verified & Active_ ✅'
                 send_telegram_message(chat_id, msg)
-
             elif text_lower == '/summary':
                 send_telegram_message(chat_id, get_daily_summary())
-
+            
             elif text_lower == '/signal':
                 tr = get_live_market_trend('^NSEI')
                 msg = '⚡ *SCALP SIGNAL*\n'
@@ -356,10 +341,8 @@ def telegram_webhook():
 
             elif text_lower in ['/mtf', '/dashboard']:
                 send_telegram_message(chat_id, get_mtf_analysis('^NSEI'))
-
             elif text_lower in ['/volume', '/pcr_data']:
                 send_telegram_message(chat_id, get_volume_pcr_analysis('^NSEI'))
-
             elif text_lower in ['/smart', '/entry']:
                 send_telegram_message(chat_id, get_smart_entry_alerts('^NSEI'))
 
@@ -404,7 +387,6 @@ def telegram_webhook():
     except Exception as e:
         logging.error(f'Webhook error: {e}')
     return 'OK', 200
-
 
 threading.Thread(target=keep_alive, daemon=True).start()
 threading.Thread(target=background_automation_scheduler, daemon=True).start()
