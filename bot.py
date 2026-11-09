@@ -49,7 +49,7 @@ def broadcast_to_all(text):
 
 
 # ==========================================
-# सभी टेक्निकल इंडिकेटर्स कैलकुलेशन फंक्शन्स
+# टेक्निकल इंडिकेटर्स कैलकुलेशन फंक्शन्स
 # ==========================================
 
 def calculate_rsi(data, window=14):
@@ -88,11 +88,9 @@ def calculate_supertrend(data, period=10, multiplier=3):
         hl2 = (data['High'] + data['Low']) / 2
         atr = (data['High'] - data['Low']).rolling(window=period).mean()
         
-        upper_band = hl2 + (multiplier * atr)
         lower_band = hl2 - (multiplier * atr)
-        
         close = data['Close'].iloc[-1]
-        # बेसिक सुपरट्रेंड जजमेंट
+        
         if close > lower_band.iloc[-1]:
             return "BULLISH 🟢"
         else:
@@ -103,7 +101,7 @@ def calculate_supertrend(data, period=10, multiplier=3):
 
 def get_market_status(symbol='^NSEI'):
     """
-    लाइव मार्केट का डेटा खींचकर सभी इंडिकेटर्स (RSI, VWAP, SMA, EMA, SuperTrend) का विश्लेषण करता है
+    लाइव मार्केट का डेटा खींचकर सभी इंडिकेटर्स का विश्लेषण करता है
     """
     try:
         ticker = yf.Ticker(symbol)
@@ -119,19 +117,19 @@ def get_market_status(symbol='^NSEI'):
             
             change_pct = round(((current_price - open_price) / open_price) * 100, 2)
             
-            # सभी इंडिकेटर्स कॉल करना
+            # इंडिकेटर्स कॉल करना
             rsi = calculate_rsi(data)
             vwap = calculate_vwap(data)
             sma_20, ema_9 = calculate_moving_averages(data)
             supertrend = calculate_supertrend(data)
 
-            # एडवांस्ड ट्रेंड लॉजिक (सभी इंडिकेटर्स के आधार पर)
+            # ट्रेंड लॉजिक
             if current_price > vwap and rsi > 50 and ema_9 > sma_20:
                 trend = '🟢 UPTREND (मजबूत बुलिश)'
             elif current_price < vwap and rsi < 50 and ema_9 < sma_20:
                 trend = '🔴 DOWNTREND (मजबूत बेयरिश)'
             else:
-                trend = '⚪ SIDEWAYS (रेंज बाउंड / साइडवेज)'
+                trend = '⚪ SIDEWAYS (रेंज बाउंड)'
 
             return {
                 'symbol': 'NIFTY 50',
@@ -167,19 +165,17 @@ def fast_market_trend_scanner():
                 if LAST_CHECKED_PRICE is not None:
                     price_diff = abs(current_price - LAST_CHECKED_PRICE)
 
-                # यदि ट्रेंड बदल गया है या कीमत में 20+ पॉइंट का बदलाव आया है, तो अलर्ट भेजें
+                # यदि ट्रेंड बदला है या 20+ पॉइंट का मूव आया है
                 if status_changed or price_diff >= 20:
                     msg = (
-                        f"🚨 **ADVANCED MARKET ALERT**\n\n"
+                        f"🚨 **MARKET TREND ALERT**\n\n"
                         f"• Index: {market['symbol']}\n"
                         f"• Price: `{current_price}` ({market['change']}%)\n"
-                        f"• Trend Status: **{current_trend}**\n\n"
-                        f"📊 **Technical Indicators:**\n"
-                        f"• RSI (14): `{market['rsi']}`\n"
-                        f"• VWAP: `{market['vwap']}`\n"
-                        f"• EMA (9): `{market['ema_9']}` | SMA (20): `{market['sma_20']}`\n"
-                        f"• SuperTrend: `{market['supertrend']}`\n\n"
-                        f"⚡ *सभी इंडिकेटर्स के आधार पर अपडेटेड सिग्नल।*"
+                        f"• Status: **{current_trend}**\n\n"
+                        f"📊 **Indicators:**\n"
+                        f"• RSI: `{market['rsi']}` | VWAP: `{market['vwap']}`\n"
+                        f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
+                        f"• SuperTrend: `{market['supertrend']}`"
                     )
                     broadcast_to_all(msg)
                     LAST_SENT_STATUS = current_trend
@@ -199,7 +195,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return 'Advanced Indicator Bot is Active & Running!'
+    return 'Clean Trend Bot is Active & Running!'
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -211,39 +207,38 @@ def webhook():
         chat_id = update['message']['chat']['id']
         text = update['message'].get('text', '').strip().lower()
 
-        # यूजर को ऑटोमैटिकली अलर्ट लिस्ट में जोड़ना
+        # यूजर को अलर्ट लिस्ट में जोड़ना
         REGISTERED_USERS.add(chat_id)
 
         if text in ['/start', 'start', 'status', '/status', 'trend']:
             market = get_market_status('^NSEI')
             if market:
                 msg = (
-                    f"📊 **LIVE MARKET ANALYSIS**\n\n"
+                    f"📊 **LIVE MARKET STATUS**\n\n"
                     f"• Price: `{market['price']}` ({market['change']}%)\n"
                     f"• Trend: **{market['trend']}**\n\n"
-                    f"📈 **Indicators Report:**\n"
+                    f"📈 **Indicators:**\n"
                     f"• RSI: `{market['rsi']}`\n"
                     f"• VWAP: `{market['vwap']}`\n"
                     f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
                     f"• SuperTrend: `{market['supertrend']}`\n\n"
-                    f"🔔 *ऑटोमैटिक अलर्ट्स चालू हैं।*"
+                    f"🔔 *ऑटोमैटिक अलर्ट्स चालू हैं।* लाइव स्टेटस देखने के लिए कभी भी `/status` भेजें।"
                 )
                 send_telegram_message(chat_id, msg)
             else:
-                send_telegram_message(chat_id, '⚠️ अभी मार्केट डेटा लोड हो रहा है। कृपया एक मिनट बाद प्रयास करें।')
+                send_telegram_message(chat_id, '⚠️ डेटा लोड हो रहा है। कृपया कुछ सेकंड बाद प्रयास करें।')
         else:
-            send_telegram_message(chat_id, '✅ बॉट एक्टिव है! लाइव इंडिकेटर्स रिपोर्ट देखने के लिए /status टाइप करें।')
+            send_telegram_message(chat_id, '✅ बॉट एक्टिव है! लाइव रिपोर्ट देखने के लिए `/status` टाइप करें।')
 
     except Exception as e:
         logging.error(f'Webhook Error: {e}')
     return 'OK', 200
 
 
-# बैकग्राउंड स्कैनर थ्रेड शुरू करना
+# बैकग्राउंड स्कैनर थ्रेड
 import threading
 threading.Thread(target=fast_market_trend_scanner, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-                
