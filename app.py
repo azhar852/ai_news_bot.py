@@ -1,401 +1,207 @@
 import os
 import logging
-import threading
-from flask import Flask, request
-from utils import (
-    PROCESSED_UPDATE_IDS, AUTO_TRADE_CONFIG, add_user_to_db,
-    analyze_pcr_data, answer_callback_query, auto_trading_scanner,
-    background_automation_scheduler, close_auto_position,
-    close_paper_position, get_advanced_indicators,
-    get_ai_trading_analysis, get_auto_position, get_auto_stats,
-    get_big_money_alert, get_daily_summary, get_db_connection,
-    get_global_markets, get_gold_silver, get_live_market_trend,
-    get_main_keyboard, get_market_news, get_next_expiry,
-    get_open_positions, get_paper_history, get_paper_wallet,
-    get_pivot_levels, get_real_vix, get_sector_performance,
-    get_symbol_price, get_today_pnl, get_today_trades_count,
-    get_usd_inr, keep_alive, open_paper_position, process_action,
-    real_time_entry_scanner, send_telegram_message,
-    get_crude_oil_data, advanced_indicator_scanner,
-    get_mtf_analysis, custom_alert_scanner, set_custom_alert,
-    get_custom_alerts, delete_custom_alert,
-    get_volume_pcr_analysis, get_smart_entry_alerts,
-    smart_entry_alert_scanner
-)
+import time
+from datetime import datetime, timedelta
+import requests
+import pandas as pd
 
-app = Flask(__name__)
+try:
+    import yfinance as yf
+except ImportError:
+    os.system('pip install yfinance')
+    import yfinance as yf
+
+# लॉगिंग सेटअप
 logging.basicConfig(
     filename='bot.log',
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
 )
+
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+RENDER_URL = os.environ.get('RENDER_URL', 'https://new-trading-bot-2.onrender.com')
+
+# रजिस्टर्ड यूजर्स को ट्रैक करने के लिए सेट
+REGISTERED_USERS = set()
+
+# पिछले ट्रेंड और कीमत को याद रखने के लिए (डुप्लीकेट अलर्ट रोकने हेतु)
+LAST_SENT_STATUS = None
+LAST_CHECKED_PRICE = None
+
+
+def send_telegram_message(chat_id, text):
+    if not chat_id or not TELEGRAM_BOT_TOKEN:
+        return
+    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
+    payload = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'Markdown',
+        'disable_web_page_preview': True,
+    }
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        logging.error(f'Telegram Send Error: {e}')
+
+
+def broadcast_to_all(text):
+    for chat_id in list(REGISTERED_USERS):
+        send_telegram_message(chat_id, text)
+
+
+def calculate_rsi(data, window=14):
+    try:
+        delta = data['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        return round(rsi.iloc[-1], 2)
+    except Exception:
+        return 50.0
+
+
+def calculate_vwap(data):
+    try:
+        q = data['Volume']
+        tp = (data['High'] + data['Low'] + data['Close']) / 3
+        vwap = (tp * q).cumsum() / q.cumsum()
+        return round(vwap.iloc[-1], 2)
+    except Exception:
+        return 0.0
+
+
+def get_market_status(symbol='^NSEI'):
+    """
+    लाइవ్ मार्केट का ट्रेंड, VWAP और RSI निकालता है
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(period='2d', interval='1m')
+        if len(data) < 10:
+            data = ticker.history(period='5d', interval='5m')
+
+        if len(data) >= 10:
+            current_price = round(data['Close'].iloc[-1], 2)
+            open_price = data['Open'].iloc[0]
+            if open_price == 0:
+                open_price = current_price
+            
+            change_pct = round(((current_price - open_price) / open_price) * 100, 2)
+            rsi = calculate_rsi(data)
+            vwap = calculate_vwap(data)
+
+            # ट्रेंड की सटीक पहचान
+            if current_price > vwap and rsi > 52:
+                trend = '🟢 UPTREND (बुलिश / ऊपर जा रहा है)'
+            elif current_price < vwap and rsi < 48:
+                trend = '🔴 DOWNTREND (बेयरिश / नीचे आ रहा है)'
+            else:
+                trend = '⚪ SIDEWAYS (रेंज बाउंड / एक दायरे में)'
+
+            return {
+                'symbol': 'NIFTY 50',
+                'price': current_price,
+                'change': change_pct,
+                'rsi': rsi,
+                'vwap': vwap,
+                'trend': trend
+            }
+    except Exception as e:
+        logging.error(f'Market Status Error: {e}')
+    return None
+
+
+# ---------------------------------------------------------
+# ऑटोमैटिक फास्ट ट्रेंड स्कैनर (हर 1.5 मिनट में चेक करेगा)
+# ---------------------------------------------------------
+def fast_market_trend_scanner():
+    global LAST_SENT_STATUS, LAST_CHECKED_PRICE
+    while True:
+        try:
+            market = get_market_status('^NSEI')
+            if market:
+                current_trend = market['trend']
+                current_price = market['price']
+
+                status_changed = (LAST_SENT_STATUS != current_trend)
+                
+                price_diff = 0
+                if LAST_CHECKED_PRICE is not None:
+                    price_diff = abs(current_price - LAST_CHECKED_PRICE)
+
+                # यदि ट्रेंड बदल गया है या कीमत में 20+ पॉइंट का बदलाव आया है, तो अलर्ट भेजें
+                if status_changed or price_diff >= 20:
+                    msg = (
+                        f"🚨 **MARKET ALERT / ट्रेंड अपडेट**\n\n"
+                        f"• Index: {market['symbol']}\n"
+                        f"• Current Price: `{current_price}` ({market['change']}%)\n"
+                        f"• Market Status: **{current_trend}**\n"
+                        f"• VWAP: `{market['vwap']}` | RSI: `{market['rsi']}`\n\n"
+                        f"⚡ *मार्केट की स्थिति बदल गई है। कृपया ध्यान दें।*"
+                    )
+                    broadcast_to_all(msg)
+                    LAST_SENT_STATUS = current_trend
+                    LAST_CHECKED_PRICE = current_price
+
+        except Exception as e:
+            logging.error(f'Scanner Error: {e}')
+        
+        # हर 90 सेकंड में मार्केट चेक करेगा
+        time.sleep(90)
+
+
+# ---------------------------------------------------------
+# Flask वेब सर्वर और टेलीग्राम वेबहुक
+# ---------------------------------------------------------
+from flask import Flask, request
+app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return 'Ultimate Pro Trading Bot Active!'
+    return 'Fast Trend Alert Bot is Active & Running Perfectly!'
 
 @app.route('/webhook', methods=['POST'])
-def telegram_webhook():
+def webhook():
     try:
         update = request.get_json(force=True, silent=True)
-        if not update:
+        if not update or 'message' not in update:
             return 'OK', 200
 
-        update_id = update.get('update_id')
-        if update_id:
-            if update_id in PROCESSED_UPDATE_IDS:
-                return 'OK', 200
-            PROCESSED_UPDATE_IDS.add(update_id)
-            if len(PROCESSED_UPDATE_IDS) > 300:
-                PROCESSED_UPDATE_IDS.clear()
+        chat_id = update['message']['chat']['id']
+        text = update['message'].get('text', '').strip().lower()
 
-        chat_id = None
-        if 'callback_query' in update:
-            chat_id = update['callback_query']['message']['chat']['id']
-        elif 'message' in update:
-            chat_id = update['message'].get('chat', {}).get('id')
+        # यूजर को ऑटोमैटिकली अलर्ट लिस्ट में जोड़ना
+        REGISTERED_USERS.add(chat_id)
 
-        if chat_id:
-            add_user_to_db(chat_id)
-
-        if 'callback_query' in update:
-            cq = update['callback_query']
-            answer_callback_query(cq['id'])
-            process_action(chat_id, cq['data'])
-            return 'OK', 200
-
-        message = update.get('message', {})
-        text = message.get('text', '').strip()
-        text_lower = text.lower()
-
-        if chat_id:
-            if text_lower in ['/start', 'start']:
-                msg = '🚀 *ULTIMATE PRO TRADING BOT*\n\n'
-                msg += 'Welcome! Institutional-grade data.\n\n'
-                msg += '💡 *Commands:*\n'
-                msg += '• `/mtf` - Multi-Timeframe\n'
-                msg += '• `/advanced` - 7 Indicators\n'
-                msg += '• `/volume` - Volume & PCR\n'
-                msg += '• `/smart` - Smart Entry\n'
-                msg += '• `/alert SYMBOL PRICE` - Set Alert\n'
-                msg += '• `/paper` - Virtual Wallet\n\n'
-                msg += 'Niche buttons use karein:'
-                send_telegram_message(chat_id, msg, reply_markup=get_main_keyboard())
-
-            elif text_lower.startswith('/calc'):
-                try:
-                    parts = text.split()
-                    entry = float(parts[1])
-                    sl = entry * 0.99
-                    t1 = entry + (entry - sl) * 2
-                    t2 = entry + (entry - sl) * 3
-                    msg = '🎯 *Trade Calculator*\n'
-                    msg += '• Entry: `' + str(entry) + '`\n'
-                    msg += '• SL: `' + str(round(sl, 2)) + '`\n'
-                    msg += '• T1: `' + str(round(t1, 2)) + '`\n'
-                    msg += '• T2: `' + str(round(t2, 2)) + '`'
-                    send_telegram_message(chat_id, msg)
-                except Exception:
-                    send_telegram_message(chat_id, '⚠️ Format: `/calc 22600`')
-
-            elif text_lower == '/paper':
-                bal = get_paper_wallet(chat_id)
-                msg = '💰 *Paper Wallet*\n'
-                msg += '• Balance: `₹' + f'{bal:,.2f}' + '`\n'
-                msg += '• Start: `₹1,00,000`\n\n'
-                msg += '💡 `/buy SYMBOL QTY` | `/sell SYMBOL QTY`\n'
-                msg += '💡 `/positions` | `/close ID`'
+        if text in ['/start', 'start', 'status', '/status', 'trend']:
+            market = get_market_status('^NSEI')
+            if market:
+                msg = (
+                    f"📊 **LIVE MARKET STATUS**\n\n"
+                    f"• Price: `{market['price']}` ({market['change']}%)\n"
+                    f"• Trend: **{market['trend']}**\n"
+                    f"• VWAP: `{market['vwap']}`\n"
+                    f"• RSI: `{market['rsi']}`\n\n"
+                    f"🔔 *आपको हर बदलाव का ऑटोमैटिक अलर्ट मिलता रहेगा।*"
+                )
                 send_telegram_message(chat_id, msg)
-
-            elif text_lower.startswith('/buy '):
-                try:
-                    parts = text.split()
-                    sym = parts[1].upper()
-                    qty = int(parts[2])
-                    price = get_symbol_price(sym)
-                    if not isinstance(price, (int, float)) or price <= 0:
-                        raise ValueError
-                    req = price * qty
-                    bal = get_paper_wallet(chat_id)
-                    if bal < req:
-                        msg = '⚠️ *Insufficient Balance*\n'
-                        msg += '• Req: `₹' + f'{req:,.2f}' + '`\n'
-                        msg += '• Avail: `₹' + f'{bal:,.2f}' + '`'
-                        send_telegram_message(chat_id, msg)
-                        return
-                    pid = open_paper_position(chat_id, sym, qty, price)
-                    msg = '✅ *Buy Executed*\n'
-                    msg += '• `' + sym + '` | Qty: `' + str(qty) + '`\n'
-                    msg += '• Entry: `₹' + f'{price:,.2f}' + '`\n'
-                    msg += '• ID: `' + str(pid) + '`'
-                    send_telegram_message(chat_id, msg)
-                except Exception:
-                    send_telegram_message(chat_id, '⚠️ Format: `/buy NIFTY 50`')
-
-            elif text_lower.startswith('/sell '):
-                try:
-                    parts = text.split()
-                    sym = parts[1].upper()
-                    qty = int(parts[2])
-                    price = get_symbol_price(sym)
-                    if not isinstance(price, (int, float)) or price <= 0:
-                        raise ValueError
-                    pid = open_paper_position(chat_id, sym, -qty, price)
-                    msg = '✅ *Sell Executed (Short)*\n'
-                    msg += '• `' + sym + '` | Qty: `' + str(qty) + '`\n'
-                    msg += '• Entry: `₹' + f'{price:,.2f}' + '`\n'
-                    msg += '• ID: `' + str(pid) + '`'
-                    send_telegram_message(chat_id, msg)
-                except Exception:
-                    send_telegram_message(chat_id, '⚠️ Format: `/sell NIFTY 50`')
-
-            elif text_lower == '/positions':
-                pos = get_open_positions(chat_id)
-                if not pos:
-                    send_telegram_message(chat_id, '📭 *No Open Positions*')
-                    return
-                msg = '📊 *Open Positions*\n\n'
-                for p in pos:
-                    pid, sym, q, ent, _ = p
-                    cur = get_symbol_price(sym)
-                    if isinstance(cur, (int, float)):
-                        pnl = (cur - ent) * q
-                        emoji = '🟢' if pnl >= 0 else '🔴'
-                        msg += emoji + ' *ID ' + str(pid) + ':* `' + sym + '`\n'
-                        msg += '  Qty: `' + str(q) + '` | Entry: `₹' + f'{ent:,.2f}' + '`\n'
-                        msg += '  Cur: `₹' + f'{cur:,.2f}' + '` | P&L: `₹' + f'{pnl:,.2f}' + '`\n\n'
-                msg += '💡 Use `/close ID`'
-                send_telegram_message(chat_id, msg)
-
-            elif text_lower.startswith('/close '):
-                try:
-                    pid = int(text.split()[1])
-                    pos = get_open_positions(chat_id)
-                    found = next((p for p in pos if p[0] == pid), None)
-                    if not found:
-                        send_telegram_message(chat_id, '⚠️ ID not found.')
-                        return
-                    sym = found[1]
-                    exit_p = get_symbol_price(sym)
-                    if not isinstance(exit_p, (int, float)):
-                        raise ValueError
-                    res = close_paper_position(pid, chat_id, exit_p)
-                    if res:
-                        em = '🟢' if res['pnl'] >= 0 else '🔴'
-                        new_bal = get_paper_wallet(chat_id)
-                        msg = '✅ *Position Closed*\n'
-                        msg += '• `' + res['symbol'] + '`\n'
-                        msg += '• Entry: `₹' + f'{res["entry"]:,.2f}' + '` → Exit: `₹' + f'{res["exit"]:,.2f}' + '`\n'
-                        msg += '• P&L: ' + em + ' `₹' + f'{res["pnl"]:,.2f}' + '`\n\n'
-                        msg += '💰 New Bal: `₹' + f'{new_bal:,.2f}' + '`'
-                        send_telegram_message(chat_id, msg)
-                except Exception:
-                    send_telegram_message(chat_id, '⚠️ Format: `/close 1`')
-
-            elif text_lower == '/autostart':
-                AUTO_TRADE_CONFIG['enabled'] = True
-                msg = '🤖 *AUTO TRADING STARTED*\n\n'
-                msg += '• Strategy: VWAP + RSI\n'
-                msg += '• SL: `' + str(AUTO_TRADE_CONFIG['sl_points']) + ' pts`\n'
-                msg += '• Target: `' + str(AUTO_TRADE_CONFIG['target_points']) + ' pts`\n'
-                msg += '• Trailing: Har `' + str(AUTO_TRADE_CONFIG['trail_step_points']) + ' pts` par'
-                send_telegram_message(chat_id, msg)
-
-            elif text_lower == '/autostop':
-                AUTO_TRADE_CONFIG['enabled'] = False
-                send_telegram_message(chat_id, '⏸️ *AUTO TRADING STOPPED*')
-
-            elif text_lower == '/autostatus':
-                status = '🟢 ACTIVE' if AUTO_TRADE_CONFIG['enabled'] else '🔴 INACTIVE'
-                pos = get_auto_position(chat_id)
-                t_trades = get_today_trades_count(chat_id)
-                t_pnl = get_today_pnl(chat_id)
-                msg = '🤖 *AUTO STATUS*\n\n'
-                msg += '• Status: ' + status + '\n'
-                msg += '• Today Trades: `' + str(t_trades) + '/' + str(AUTO_TRADE_CONFIG['max_trades_per_day']) + '`\n'
-                msg += '• Today P&L: `₹' + f'{t_pnl:,.2f}' + '`\n'
-                if pos:
-                    pid, sym, q, ent, sl, tgt, typ, _ = pos[:8]
-                    cur = get_symbol_price(sym)
-                    if isinstance(cur, (int, float)):
-                        pnl = (cur - ent) * q if typ == 'BUY' else (ent - cur) * q
-                        msg += '\n📊 *Open:*\n'
-                        msg += '• ID: `' + str(pid) + '` | ' + typ + ' `' + sym + '`\n'
-                        msg += '• Entry: `₹' + f'{ent:,.2f}' + '` | Cur: `₹' + f'{cur:,.2f}' + '`\n'
-                        msg += '• SL: `₹' + f'{sl:,.2f}' + '` | Target: `₹' + f'{tgt:,.2f}' + '`\n'
-                        msg += '• P&L: `₹' + f'{pnl:,.2f}' + '`'
-                send_telegram_message(chat_id, msg)
-
-            elif text_lower in ['/vix', '/india_vix']:
-                send_telegram_message(chat_id, get_real_vix())
-            elif text_lower in ['/global', '/world']:
-                send_telegram_message(chat_id, get_global_markets())
-            elif text_lower in ['/usdinr', '/dollar']:
-                send_telegram_message(chat_id, get_usd_inr())
-            elif text_lower in ['/metals', '/gold']:
-                send_telegram_message(chat_id, get_gold_silver())
-            elif text_lower in ['/sectors', '/sector']:
-                send_telegram_message(chat_id, get_sector_performance())
-            elif text_lower in ['/expiry', '/expiration']:
-                send_telegram_message(chat_id, get_next_expiry())
-            elif text_lower == '/news':
-                send_telegram_message(chat_id, get_market_news())
-            elif text_lower == '/ai_analysis':
-                send_telegram_message(chat_id, get_ai_trading_analysis('General Market Overview'))
-            
-            elif text_lower in ['/trend', '/market']:
-                tr = get_live_market_trend('^NSEI')
-                msg = '🎯 *LIVE TREND*\n'
-                msg += '• Price: `' + str(tr['price']) + '` (' + str(tr['change']) + '%)\n'
-                msg += '• Status: ' + tr['status'] + '\n'
-                msg += '• VWAP: `' + str(tr['vwap']) + '` | RSI: `' + str(tr['rsi']) + '`\n'
-                msg += '💡 ' + tr['action']
-                send_telegram_message(chat_id, msg)
-
-            elif text_lower in ['/nifty', '/nifty50']:
-                tr = get_live_market_trend('^NSEI')
-                msg = '📊 *NIFTY 50*\n'
-                msg += '• Price: `' + str(tr['price']) + '` (' + str(tr['change']) + '%)\n'
-                msg += '• VWAP: `' + str(tr['vwap']) + '` | RSI: `' + str(tr['rsi']) + '`\n'
-                msg += '• Bias: ' + tr['status']
-                send_telegram_message(chat_id, msg)
-
-            elif text_lower in ['/banknifty']:
-                tr = get_live_market_trend('^NSEBANK')
-                msg = '🏦 *BANK NIFTY*\n'
-                msg += '• Price: `' + str(tr['price']) + '` (' + str(tr['change']) + '%)\n'
-                msg += '• Bias: ' + tr['status']
-                send_telegram_message(chat_id, msg)
-
-            elif text_lower in ['/sensex']:
-                tr = get_live_market_trend('^BSESN')
-                msg = '📈 *SENSEX*\n'
-                msg += '• Price: `' + str(tr['price']) + '` (' + str(tr['change']) + '%)\n'
-                msg += '• Bias: ' + tr['status']
-                send_telegram_message(chat_id, msg)
-
-            elif text_lower == '/pivots':
-                send_telegram_message(chat_id, get_pivot_levels('^NSEI'))
-            elif text_lower == '/pcr':
-                p = analyze_pcr_data()
-                msg = '📈 *PCR*\n'
-                msg += '• Value: `' + str(p['pcr']) + '`\n'
-                msg += '• Sentiment: ' + p['sentiment']
-                send_telegram_message(chat_id, msg)
-            elif text_lower == '/bigmoney':
-                bm = get_big_money_alert()
-                msg = '🐋 *SMART MONEY*\n'
-                msg += '• ' + bm['action'] + '\n'
-                msg += '• ' + bm['details']
-                send_telegram_message(chat_id, msg)
-            elif text_lower == '/commodity':
-                send_telegram_message(chat_id, get_crude_oil_data())
-            elif text_lower == '/support':
-                msg = '📋 *SUPPORT*\n\n'
-                msg += '• For MSME registration or tech support in Bhopal, contact admin.\n\n'
-                msg += '_Status: Verified & Active_ ✅'
-                send_telegram_message(chat_id, msg)
-            elif text_lower == '/summary':
-                send_telegram_message(chat_id, get_daily_summary())
-            
-            elif text_lower == '/signal':
-                tr = get_live_market_trend('^NSEI')
-                msg = '⚡ *SCALP SIGNAL*\n'
-                msg += '• Price: `' + str(tr['price']) + '`\n'
-                msg += '• VWAP: `' + str(tr['vwap']) + '` | RSI: `' + str(tr['rsi']) + '`\n'
-                msg += '• Mode: ' + tr['status'] + '\n'
-                msg += '💡 ' + tr['action']
-                send_telegram_message(chat_id, msg)
-
-            elif text_lower in ['/advanced', '/indicators']:
-                ind = get_advanced_indicators('^NSEI')
-                if not ind:
-                    send_telegram_message(chat_id, '⚠️ Data unavailable.')
-                else:
-                    sma_text = '`' + str(ind['sma_200']) + '`' if ind['sma_200'] else 'N/A'
-                    ema9_ok = '✅' if ind['price'] > ind['ema_9'] else '❌'
-                    ema21_ok = '✅' if ind['price'] > ind['ema_21'] else '❌'
-                    ema50_ok = '✅' if ind['price'] > ind['ema_50'] else '❌'
-                    st_signal = '🟢 BUY' if ind['supertrend'] == 'BUY' else '🔴 SELL'
-                    signals_text = '\n'.join(['• ' + s for s in ind['signals']])
-                    msg = '📊 *ADVANCED TECHNICAL ANALYSIS*\n\n'
-                    msg += '💰 *Price:* `' + str(ind['price']) + '`\n\n'
-                    msg += '📈 *MOVING AVERAGES:*\n'
-                    msg += '• EMA 9: `' + str(ind['ema_9']) + '` ' + ema9_ok + '\n'
-                    msg += '• EMA 21: `' + str(ind['ema_21']) + '` ' + ema21_ok + '\n'
-                    msg += '• EMA 50: `' + str(ind['ema_50']) + '` ' + ema50_ok + '\n'
-                    msg += '• SMA 200: ' + sma_text + '\n\n'
-                    msg += '📉 *MACD:*\n'
-                    msg += '• MACD: `' + str(ind['macd_line']) + '` | Signal: `' + str(ind['signal_line']) + '`\n'
-                    msg += '• Histogram: `' + str(ind['macd_histogram']) + '`\n\n'
-                    msg += '📊 *BOLLINGER BANDS:*\n'
-                    msg += '• Upper: `' + str(ind['upper_band']) + '`\n'
-                    msg += '• Lower: `' + str(ind['lower_band']) + '`\n\n'
-                    msg += '⚡ *VOLATILITY:*\n'
-                    msg += '• ATR: `' + str(ind['atr']) + '` pts\n'
-                    msg += '• ADX: `' + str(ind['adx']) + '`\n\n'
-                    msg += '🎯 *SUPERTREND:*\n'
-                    msg += '• Signal: ' + st_signal + '\n\n'
-                    msg += '🔔 *SIGNALS:*\n' + signals_text
-                    send_telegram_message(chat_id, msg)
-
-            elif text_lower in ['/mtf', '/dashboard']:
-                send_telegram_message(chat_id, get_mtf_analysis('^NSEI'))
-            elif text_lower in ['/volume', '/pcr_data']:
-                send_telegram_message(chat_id, get_volume_pcr_analysis('^NSEI'))
-            elif text_lower in ['/smart', '/entry']:
-                send_telegram_message(chat_id, get_smart_entry_alerts('^NSEI'))
-
-            elif text_lower.startswith('/alert '):
-                try:
-                    parts = text.split()
-                    if len(parts) < 3:
-                        raise IndexError
-                    sym = parts[1].upper()
-                    target = float(parts[2])
-                    set_custom_alert(chat_id, sym, target)
-                    msg = '🔔 *Alert Set!*\n\n'
-                    msg += '• Symbol: `' + sym + '`\n'
-                    msg += '• Target: `' + str(target) + '`\n\n'
-                    msg += 'Bot alert dega jab price cross karega.\n\n'
-                    msg += '💡 Delete: `/delalert ' + sym + '`'
-                    send_telegram_message(chat_id, msg)
-                except Exception:
-                    send_telegram_message(chat_id, '⚠️ Format: `/alert NIFTY 23500`')
-
-            elif text_lower.startswith('/delalert '):
-                try:
-                    sym = text.split()[1].upper()
-                    delete_custom_alert(chat_id, sym)
-                    send_telegram_message(chat_id, '🗑️ Alert deleted for `' + sym + '`.')
-                except Exception:
-                    send_telegram_message(chat_id, '⚠️ Format: `/delalert NIFTY`')
-
-            elif text_lower == '/myalerts':
-                alerts = get_custom_alerts(chat_id)
-                if not alerts:
-                    send_telegram_message(chat_id, '📭 *No Active Alerts*')
-                else:
-                    msg = '🔔 *Your Active Alerts*\n\n'
-                    for a in alerts:
-                        msg += '• `' + str(a[1]) + '` @ `' + str(a[2]) + '`\n'
-                    send_telegram_message(chat_id, msg)
-
             else:
-                send_telegram_message(chat_id, '✅ Command received. Use buttons below:', reply_markup=get_main_keyboard())
+                send_telegram_message(chat_id, '⚠️ अभी मार्केट डेटा लोड होने में समय लग रहा है। कृपया दोबारा प्रयास करें।')
+        else:
+            send_telegram_message(chat_id, '✅ बॉट एक्टिव है! /status टाइप करके अभी का लाइव ट्रेंड देख सकते हैं।')
 
     except Exception as e:
-        logging.error(f'Webhook error: {e}')
+        logging.error(f'Webhook Error: {e}')
     return 'OK', 200
 
-threading.Thread(target=keep_alive, daemon=True).start()
-threading.Thread(target=background_automation_scheduler, daemon=True).start()
-threading.Thread(target=real_time_entry_scanner, daemon=True).start()
-threading.Thread(target=auto_trading_scanner, daemon=True).start()
-threading.Thread(target=advanced_indicator_scanner, daemon=True).start()
-threading.Thread(target=custom_alert_scanner, daemon=True).start()
-threading.Thread(target=smart_entry_alert_scanner, daemon=True).start()
+
+# बैकग्राउंड स्कैनर थ्रेड शुरू करना
+import threading
+threading.Thread(target=fast_market_trend_scanner, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+            
