@@ -1,4 +1,7 @@
-yfinance
-requests
-pandas
 flask
+yfinance
+pandas
+pandas_ta
+requests
+apscheduler
+gunicorn
