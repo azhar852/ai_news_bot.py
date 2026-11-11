@@ -68,7 +68,7 @@ def save_state(last_trend, last_price):
 bot_state = load_state()
 
 # ==========================================
-# 4. Telegram Functions
+# 4. Telegram Functions (बटन हटाने वाले फीचर के साथ)
 # ==========================================
 def send_telegram_message(chat_id, text):
     if not chat_id or not TELEGRAM_BOT_TOKEN:
@@ -79,6 +79,8 @@ def send_telegram_message(chat_id, text):
         'text': text,
         'parse_mode': 'Markdown',
         'disable_web_page_preview': True,
+        # यह कमांड टेलीग्राम को पुराने सारे की-बोर्ड बटन्स हमेशा के लिए हटाने का आदेश देती है
+        'reply_markup': {"remove_keyboard": True}
     }
     try:
         response = requests.post(url, json=payload, timeout=10)
@@ -95,11 +97,10 @@ def broadcast_to_all(text):
         send_telegram_message(chat_id, text)
 
 # ==========================================
-# 5. Technical Indicators (Pure Pandas - No pandas_ta)
+# 5. Technical Indicators (Pure Pandas)
 # ==========================================
 
 def calculate_rsi(data, window=14):
-    """RSI Calculation using pure pandas"""
     delta = data['Close'].diff()
     gain = delta.where(delta > 0, 0.0).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(window=window).mean()
@@ -108,30 +109,24 @@ def calculate_rsi(data, window=14):
     return round(rsi.iloc[-1], 2) if not pd.isna(rsi.iloc[-1]) else 50.0
 
 def calculate_vwap(data):
-    """VWAP Calculation"""
     typical_price = (data['High'] + data['Low'] + data['Close']) / 3
     vwap = (typical_price * data['Volume']).cumsum() / data['Volume'].cumsum()
     return round(vwap.iloc[-1], 2) if not pd.isna(vwap.iloc[-1]) else round(data['Close'].iloc[-1], 2)
 
 def calculate_ema(data, span):
-    """EMA Calculation"""
     ema = data['Close'].ewm(span=span, adjust=False).mean()
     return round(ema.iloc[-1], 2) if not pd.isna(ema.iloc[-1]) else round(data['Close'].iloc[-1], 2)
 
 def calculate_sma(data, window):
-    """SMA Calculation"""
     sma = data['Close'].rolling(window=window).mean()
     return round(sma.iloc[-1], 2) if not pd.isna(sma.iloc[-1]) else round(data['Close'].iloc[-1], 2)
 
 def calculate_supertrend(data, period=10, multiplier=3):
-    """SuperTrend Calculation (Simplified but accurate)"""
     hl2 = (data['High'] + data['Low']) / 2
     atr = data['High'].rolling(window=period).max() - data['Low'].rolling(window=period).min()
     atr = atr.rolling(window=period).mean()
     
     lower_band = hl2 - (multiplier * atr)
-    upper_band = hl2 + (multiplier * atr)
-    
     close = data['Close'].iloc[-1]
     
     if pd.isna(lower_band.iloc[-1]):
@@ -161,14 +156,12 @@ def get_market_status(symbol='^NSEI'):
         
         change_pct = round(((current_price - open_price) / open_price) * 100, 2)
         
-        # Indicators
         rsi = calculate_rsi(data)
         vwap = calculate_vwap(data)
         ema_9 = calculate_ema(data, 9)
         sma_20 = calculate_sma(data, 20)
         supertrend = calculate_supertrend(data)
 
-        # Trend Logic
         if current_price > vwap and rsi > 50 and ema_9 > sma_20 and "BULLISH" in supertrend:
             trend = '🟢 UPTREND (मजबूत बुलिश)'
         elif current_price < vwap and rsi < 50 and ema_9 < sma_20 and "BEARISH" in supertrend:
@@ -298,3 +291,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logging.info(f"🚀 Starting server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
+    
