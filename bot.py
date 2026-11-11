@@ -1,16 +1,17 @@
 import os
 import logging
-import time
+import json
+import sqlite3
 import requests
 import pandas as pd
+import yfinance as yf
+import pandas_ta as ta
+from flask import Flask, request
+from apscheduler.schedulers.background import BackgroundScheduler
 
-try:
-    import yfinance as yf
-except ImportError:
-    os.system('pip install yfinance')
-    import yfinance as yf
-
-# लॉगिंग सेटअप
+# ==========================================
+# 1. कॉन्फ़िगरेशन और लॉगिंग
+# ==========================================
 logging.basicConfig(
     filename='bot.log',
     level=logging.INFO,
@@ -18,15 +19,57 @@ logging.basicConfig(
 )
 
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '')  # जैसे: https://your-app.onrender.com/webhook
 
-# रजिस्टर्ड यूजर्स को ट्रैक करने के लिए सेट
-REGISTERED_USERS = set()
+app = Flask(__name__)
 
-# पिछले ट्रेंड को याद रखने के लिए (डुप्लीकेट अलर्ट रोकने हेतु)
-LAST_SENT_STATUS = None
-LAST_CHECKED_PRICE = None
+# ==========================================
+# 2. SQLite डेटाबेस सेटअप (यूजर्स को सेव रखने के लिए)
+# ==========================================
+def init_db():
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (chat_id INTEGER PRIMARY KEY)''')
+    conn.commit()
+    conn.close()
 
+def add_user(chat_id):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO users (chat_id) VALUES (?)', (chat_id,))
+    conn.commit()
+    conn.close()
 
+def get_all_users():
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT chat_id FROM users')
+    users = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return users
+
+init_db()
+
+# ==========================================
+# 3. स्टेट मैनेजमेंट (डुप्लीकेट अलर्ट रोकने के लिए)
+# ==========================================
+STATE_FILE = 'bot_state.json'
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    return {"last_trend": None, "last_price": 0.0}
+
+def save_state(last_trend, last_price):
+    with open(STATE_FILE, 'w') as f:
+        json.dump({"last_trend": last_trend, "last_price": last_price}, f)
+
+bot_state = load_state()
+
+# ==========================================
+# 4. टेलीग्राम फंक्शन्स
+# ==========================================
 def send_telegram_message(chat_id, text):
     if not chat_id or not TELEGRAM_BOT_TOKEN:
         return
@@ -38,164 +81,131 @@ def send_telegram_message(chat_id, text):
         'disable_web_page_preview': True,
     }
     try:
-        requests.post(url, json=payload, timeout=5)
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 429:  # Rate Limit Handling
+            logging.warning("Rate limit hit. Sleeping for 5 seconds.")
+            time.sleep(5)
+            requests.post(url, json=payload, timeout=10)
     except Exception as e:
         logging.error(f'Telegram Send Error: {e}')
 
-
 def broadcast_to_all(text):
-    for chat_id in list(REGISTERED_USERS):
+    users = get_all_users()
+    for chat_id in users:
         send_telegram_message(chat_id, text)
 
-
 # ==========================================
-# टेक्निकल इंडिकेटर्स कैलकुलेशन फंक्शन्स
+# 5. मार्केट डेटा और इंडिकेटर्स (Pandas_TA के साथ)
 # ==========================================
-
-def calculate_rsi(data, window=14):
-    try:
-        delta = data['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        return round(rsi.iloc[-1], 2)
-    except Exception:
-        return 50.0
-
-
-def calculate_vwap(data):
-    try:
-        q = data['Volume']
-        tp = (data['High'] + data['Low'] + data['Close']) / 3
-        vwap = (tp * q).cumsum() / q.cumsum()
-        return round(vwap.iloc[-1], 2)
-    except Exception:
-        return 0.0
-
-
-def calculate_moving_averages(data):
-    try:
-        sma_20 = round(data['Close'].rolling(window=20).mean().iloc[-1], 2)
-        ema_9 = round(data['Close'].ewm(span=9, adjust=False).mean().iloc[-1], 2)
-        return sma_20, ema_9
-    except Exception:
-        return 0.0, 0.0
-
-
-def calculate_supertrend(data, period=10, multiplier=3):
-    try:
-        hl2 = (data['High'] + data['Low']) / 2
-        atr = (data['High'] - data['Low']).rolling(window=period).mean()
-        
-        lower_band = hl2 - (multiplier * atr)
-        close = data['Close'].iloc[-1]
-        
-        if close > lower_band.iloc[-1]:
-            return "BULLISH 🟢"
-        else:
-            return "BEARISH 🔴"
-    except Exception:
-        return "NEUTRAL ⚪"
-
-
 def get_market_status(symbol='^NSEI'):
-    """
-    लाइव मार्केट का डेटा खींचकर सभी इंडिकेटर्स का विश्लेषण करता है
-    """
     try:
         ticker = yf.Ticker(symbol)
-        data = ticker.history(period='2d', interval='1m')
-        if len(data) < 10:
-            data = ticker.history(period='5d', interval='5m')
+        # 5 दिन का 5-मिनट डेटा (1-मिनट की तुलना में ज्यादा रिलायबल और Rate Limit से बचाव)
+        data = ticker.history(period='5d', interval='5m')
+        
+        if data.empty:
+            logging.warning("Empty data received from yfinance (Market might be closed).")
+            return None
 
-        if len(data) >= 10:
-            current_price = round(data['Close'].iloc[-1], 2)
-            open_price = data['Open'].iloc[0]
-            if open_price == 0:
-                open_price = current_price
-            
-            change_pct = round(((current_price - open_price) / open_price) * 100, 2)
-            
-            # इंडिकेटर्स कॉल करना
-            rsi = calculate_rsi(data)
-            vwap = calculate_vwap(data)
-            sma_20, ema_9 = calculate_moving_averages(data)
-            supertrend = calculate_supertrend(data)
+        # इंडिकेटर्स कैलकुलेशन (Pandas_TA का उपयोग)
+        data['RSI'] = ta.rsi(data['Close'], length=14)
+        data['VWAP'] = ta.vwap(high=data['High'], low=data['Low'], close=data['Close'], volume=data['Volume'])
+        data['EMA_9'] = ta.ema(data['Close'], length=9)
+        data['SMA_20'] = ta.sma(data['Close'], length=20)
+        
+        # SuperTrend (Returns: SUPERT_10_3.0, SUPERTd_10_3.0, SUPERTl_10_3.0, SUPERTs_10_3.0)
+        st = ta.supertrend(high=data['High'], low=data['Low'], close=data['Close'], length=10, multiplier=3)
+        data = pd.concat([data, st], axis=1)
 
-            # ट्रेंड लॉजिक
-            if current_price > vwap and rsi > 50 and ema_9 > sma_20:
-                trend = '🟢 UPTREND (मजबूत बुलिश)'
-            elif current_price < vwap and rsi < 50 and ema_9 < sma_20:
-                trend = '🔴 DOWNTREND (मजबूत बेयरिश)'
-            else:
-                trend = '⚪ SIDEWAYS (रेंज बाउंड)'
+        # latest values
+        current_price = round(data['Close'].iloc[-1], 2)
+        open_price = data['Open'].iloc[0]
+        if open_price == 0: open_price = current_price
+        
+        change_pct = round(((current_price - open_price) / open_price) * 100, 2)
+        
+        rsi = round(data['RSI'].iloc[-1], 2) if not pd.isna(data['RSI'].iloc[-1]) else 50.0
+        vwap = round(data['VWAP'].iloc[-1], 2) if not pd.isna(data['VWAP'].iloc[-1]) else current_price
+        ema_9 = round(data['EMA_9'].iloc[-1], 2) if not pd.isna(data['EMA_9'].iloc[-1]) else current_price
+        sma_20 = round(data['SMA_20'].iloc[-1], 2) if not pd.isna(data['SMA_20'].iloc[-1]) else current_price
+        
+        # SuperTrend Direction (1 = Bullish, -1 = Bearish)
+        st_dir = data['SUPERTd_10_3.0'].iloc[-1]
+        supertrend_status = "BULLISH 🟢" if st_dir == 1 else "BEARISH 🔴"
 
-            return {
-                'symbol': 'NIFTY 50',
-                'price': current_price,
-                'change': change_pct,
-                'rsi': rsi,
-                'vwap': vwap,
-                'sma_20': sma_20,
-                'ema_9': ema_9,
-                'supertrend': supertrend,
-                'trend': trend
-            }
+        # Trend Logic
+        if current_price > vwap and rsi > 50 and ema_9 > sma_20 and st_dir == 1:
+            trend = '🟢 UPTREND (मजबूत बुलिश)'
+        elif current_price < vwap and rsi < 50 and ema_9 < sma_20 and st_dir == -1:
+            trend = '🔴 DOWNTREND (मजबूत बेयरिश)'
+        else:
+            trend = '⚪ SIDEWAYS (रेंज बाउंड)'
+
+        return {
+            'symbol': 'NIFTY 50',
+            'price': current_price,
+            'change': change_pct,
+            'rsi': rsi,
+            'vwap': vwap,
+            'sma_20': sma_20,
+            'ema_9': ema_9,
+            'supertrend': supertrend_status,
+            'trend': trend
+        }
     except Exception as e:
         logging.error(f'Market Status Error: {e}')
-    return None
+        return None
 
-
-# ---------------------------------------------------------
-# ऑटोमैटिक फास्ट ट्रेंड स्कैनर (हर 90 सेकंड में चेक करेगा)
-# ---------------------------------------------------------
+# ==========================================
+# 6. ऑटोमैटिक स्कैनर (APScheduler के साथ)
+# ==========================================
 def fast_market_trend_scanner():
-    global LAST_SENT_STATUS, LAST_CHECKED_PRICE
-    while True:
-        try:
-            market = get_market_status('^NSEI')
-            if market:
-                current_trend = market['trend']
-                current_price = market['price']
+    global bot_state
+    try:
+        market = get_market_status('^NSEI')
+        if not market:
+            return
 
-                status_changed = (LAST_SENT_STATUS != current_trend)
-                
-                price_diff = 0
-                if LAST_CHECKED_PRICE is not None:
-                    price_diff = abs(current_price - LAST_CHECKED_PRICE)
+        current_trend = market['trend']
+        current_price = market['price']
 
-                # यदि ट्रेंड बदला है या 20+ पॉइंट का मूव आया है
-                if status_changed or price_diff >= 20:
-                    msg = (
-                        f"🚨 **MARKET TREND ALERT**\n\n"
-                        f"• Index: {market['symbol']}\n"
-                        f"• Price: `{current_price}` ({market['change']}%)\n"
-                        f"• Status: **{current_trend}**\n\n"
-                        f"📊 **Indicators:**\n"
-                        f"• RSI: `{market['rsi']}` | VWAP: `{market['vwap']}`\n"
-                        f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
-                        f"• SuperTrend: `{market['supertrend']}`"
-                    )
-                    broadcast_to_all(msg)
-                    LAST_SENT_STATUS = current_trend
-                    LAST_CHECKED_PRICE = current_price
+        status_changed = (bot_state['last_trend'] != current_trend)
+        price_diff = abs(current_price - bot_state['last_price']) if bot_state['last_price'] > 0 else 0
 
-        except Exception as e:
-            logging.error(f'Scanner Error: {e}')
-        
-        time.sleep(90)
+        # अलर्ट ट्रिगर: ट्रेंड बदला या 20+ पॉइंट का मूव
+        if status_changed or price_diff >= 20:
+            msg = (
+                f"🚨 **MARKET TREND ALERT**\n\n"
+                f"• Index: {market['symbol']}\n"
+                f"• Price: `{current_price}` ({market['change']}%)\n"
+                f"• Status: **{current_trend}**\n\n"
+                f"📊 **Indicators:**\n"
+                f"• RSI: `{market['rsi']}` | VWAP: `{market['vwap']}`\n"
+                f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
+                f"• SuperTrend: `{market['supertrend']}`"
+            )
+            broadcast_to_all(msg)
+            
+            # State अपडेट और सेव करें
+            bot_state['last_trend'] = current_trend
+            bot_state['last_price'] = current_price
+            save_state(current_trend, current_price)
+            logging.info(f"Alert sent: {current_trend} at {current_price}")
 
+    except Exception as e:
+        logging.error(f'Scanner Error: {e}')
 
-# ---------------------------------------------------------
-# Flask वेब सर्वर और टेलीग्राम वेबहुक
-# ---------------------------------------------------------
-from flask import Flask, request
-app = Flask(__name__)
+# Scheduler सेटअप (हर 90 सेकंड पर चलेगा, केवल 1 बार globally)
+scheduler = BackgroundScheduler()
+scheduler.add_job(fast_market_trend_scanner, 'interval', seconds=90, max_instances=1)
+scheduler.start()
 
+# ==========================================
+# 7. Flask वेब सर्वर और टेलीग्राम वेबहुक
+# ==========================================
 @app.route('/')
 def home():
-    return 'Clean Trend Bot is Active & Running!'
+    return '✅ Clean Trend Bot is Active & Running!'
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -207,14 +217,15 @@ def webhook():
         chat_id = update['message']['chat']['id']
         text = update['message'].get('text', '').strip().lower()
 
-        # यूजर को अलर्ट लिस्ट में जोड़ना
-        REGISTERED_USERS.add(chat_id)
+        # यूजर को डेटाबेस में जोड़ें
+        add_user(chat_id)
 
         if text in ['/start', 'start', 'status', '/status', 'trend']:
             market = get_market_status('^NSEI')
             if market:
                 msg = (
                     f"📊 **LIVE MARKET STATUS**\n\n"
+                    f"• Index: {market['symbol']}\n"
                     f"• Price: `{market['price']}` ({market['change']}%)\n"
                     f"• Trend: **{market['trend']}**\n\n"
                     f"📈 **Indicators:**\n"
@@ -226,7 +237,7 @@ def webhook():
                 )
                 send_telegram_message(chat_id, msg)
             else:
-                send_telegram_message(chat_id, '⚠️ डेटा लोड हो रहा है। कृपया कुछ सेकंड बाद प्रयास करें।')
+                send_telegram_message(chat_id, '⚠️ मार्केट बंद है या डेटा लोड हो रहा है। कृपया कुछ सेकंड बाद प्रयास करें।')
         else:
             send_telegram_message(chat_id, '✅ बॉट एक्टिव है! लाइव रिपोर्ट देखने के लिए `/status` टाइप करें।')
 
@@ -234,11 +245,26 @@ def webhook():
         logging.error(f'Webhook Error: {e}')
     return 'OK', 200
 
-
-# बैकग्राउंड स्कैनर थ्रेड
-import threading
-threading.Thread(target=fast_market_trend_scanner, daemon=True).start()
+# ==========================================
+# 8. स्टार्टअप सेटअप (Webhook रजिस्टर करना)
+# ==========================================
+def setup_webhook():
+    if WEBHOOK_URL and TELEGRAM_BOT_TOKEN:
+        url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}'
+        try:
+            response = requests.get(url)
+            if response.json().get('ok'):
+                logging.info("Webhook successfully set!")
+            else:
+                logging.error(f"Webhook setup failed: {response.text}")
+        except Exception as e:
+            logging.error(f"Webhook setup error: {e}")
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    setup_webhook()
+    # लोकल टेस्टिंग के लिए:
+    # port = int(os.environ.get('PORT', 5000))
+    # app.run(host='0.0.0.0', port=port, debug=False)
+    
+    # प्रोडक्शन (Render/Heroku) के लिए Gunicorn का उपयोग करें:
+    # gunicorn app:app
