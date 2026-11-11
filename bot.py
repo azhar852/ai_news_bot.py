@@ -27,26 +27,36 @@ app = Flask(__name__)
 # 2. SQLite डेटाबेस
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS users (chat_id INTEGER PRIMARY KEY)')
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute('CREATE TABLE IF NOT EXISTS users (chat_id INTEGER PRIMARY KEY)')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"DB Init Error: {e}")
 
 def add_user(chat_id):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT OR IGNORE INTO users (chat_id) VALUES (?)', (chat_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute('INSERT OR IGNORE INTO users (chat_id) VALUES (?)', (chat_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Add User Error: {e}")
 
 def get_all_users():
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT chat_id FROM users')
-    users = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return users
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT chat_id FROM users')
+        users = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return users
+    except Exception as e:
+        logging.error(f"Get Users Error: {e}")
+        return []
 
 init_db()
 
@@ -57,30 +67,41 @@ STATE_FILE = 'bot_state.json'
 
 def load_state():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
     return {"last_trend": None, "last_price": 0.0}
 
 def save_state(last_trend, last_price):
-    with open(STATE_FILE, 'w') as f:
-        json.dump({"last_trend": last_trend, "last_price": last_price}, f)
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump({"last_trend": last_trend, "last_price": last_price}, f)
+    except Exception as e:
+        logging.error(f"Save State Error: {e}")
 
 bot_state = load_state()
 
 # ==========================================
-# 4. Telegram Functions (बटन हटाने वाले फीचर के साथ)
+# 4. Telegram Functions (Inline Buttons & Clean Screen)
 # ==========================================
 def send_telegram_message(chat_id, text):
     if not chat_id or not TELEGRAM_BOT_TOKEN:
         return
     url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
+    
+    # यहाँ इनलाइन बटन जोड़ा गया है जो चैट स्क्रीन को गंदा नहीं करता और पुराने की-बोर्ड को हटा देता है
     payload = {
         'chat_id': chat_id,
         'text': text,
         'parse_mode': 'Markdown',
         'disable_web_page_preview': True,
-        # यह कमांड टेलीग्राम को पुराने सारे की-बोर्ड बटन्स हमेशा के लिए हटाने का आदेश देती है
-        'reply_markup': {"remove_keyboard": True}
+        'reply_markup': {
+            'inline_keyboard': [
+                [{'text': '🔄 Refresh Status', 'callback_data': 'refresh_status'}]
+            ]
+        }
     }
     try:
         response = requests.post(url, json=payload, timeout=10)
@@ -99,7 +120,6 @@ def broadcast_to_all(text):
 # ==========================================
 # 5. Technical Indicators (Pure Pandas)
 # ==========================================
-
 def calculate_rsi(data, window=14):
     delta = data['Close'].diff()
     gain = delta.where(delta > 0, 0.0).rolling(window=window).mean()
@@ -236,34 +256,59 @@ def home():
 def webhook():
     try:
         update = request.get_json(force=True, silent=True)
-        if not update or 'message' not in update:
+        if not update:
             return 'OK', 200
 
-        chat_id = update['message']['chat']['id']
-        text = update['message'].get('text', '').strip().lower()
+        # यदि यूजर ने इनलाइन बटन दबाया है (Callback Query)
+        if 'callback_query' in update:
+            callback = update['callback_query']
+            chat_id = callback['message']['chat']['id']
+            data = callback.get('data', '')
+            
+            if data == 'refresh_status':
+                market = get_market_status('^NSEI')
+                if market:
+                    msg = (
+                        f"📊 *LIVE MARKET STATUS (Refreshed)*\n\n"
+                        f"• Index: {market['symbol']}\n"
+                        f"• Price: `{market['price']}` ({market['change']}%)\n"
+                        f"• Trend: *{market['trend']}*\n\n"
+                        f"📈 *Indicators:*\n"
+                        f"• RSI: `{market['rsi']}`\n"
+                        f"• VWAP: `{market['vwap']}`\n"
+                        f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
+                        f"• SuperTrend: `{market['supertrend']}`"
+                    )
+                    send_telegram_message(chat_id, msg)
+            return 'OK', 200
 
-        add_user(chat_id)
+        # सामान्य टेक्स्ट मैसेज के लिए (/start या /status)
+        if 'message' in update:
+            chat_id = update['message']['chat']['id']
+            text = update['message'].get('text', '').strip().lower()
 
-        if text in ['/start', 'start', 'status', '/status', 'trend']:
-            market = get_market_status('^NSEI')
-            if market:
-                msg = (
-                    f"📊 *LIVE MARKET STATUS*\n\n"
-                    f"• Index: {market['symbol']}\n"
-                    f"• Price: `{market['price']}` ({market['change']}%)\n"
-                    f"• Trend: *{market['trend']}*\n\n"
-                    f"📈 *Indicators:*\n"
-                    f"• RSI: `{market['rsi']}`\n"
-                    f"• VWAP: `{market['vwap']}`\n"
-                    f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
-                    f"• SuperTrend: `{market['supertrend']}`\n\n"
-                    f"🔔 _ऑटोमैटिक अलर्ट्स चालू हैं।_ लाइव स्टेटस देखने के लिए कभी भी `/status` भेजें।"
-                )
-                send_telegram_message(chat_id, msg)
+            add_user(chat_id)
+
+            if text in ['/start', 'start', 'status', '/status', 'trend']:
+                market = get_market_status('^NSEI')
+                if market:
+                    msg = (
+                        f"📊 *LIVE MARKET STATUS*\n\n"
+                        f"• Index: {market['symbol']}\n"
+                        f"• Price: `{market['price']}` ({market['change']}%)\n"
+                        f"• Trend: *{market['trend']}*\n\n"
+                        f"📈 *Indicators:*\n"
+                        f"• RSI: `{market['rsi']}`\n"
+                        f"• VWAP: `{market['vwap']}`\n"
+                        f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
+                        f"• SuperTrend: `{market['supertrend']}`\n\n"
+                        f"🔔 _ऑटोमैटिक अलर्ट्स चालू हैं।_"
+                    )
+                    send_telegram_message(chat_id, msg)
+                else:
+                    send_telegram_message(chat_id, '⚠️ मार्केट बंद है या डेटा लोड हो रहा है। कृपया कुछ सेकंड बाद प्रयास करें।')
             else:
-                send_telegram_message(chat_id, '⚠️ मार्केट बंद है या डेटा लोड हो रहा है। कृपया कुछ सेकंड बाद प्रयास करें।')
-        else:
-            send_telegram_message(chat_id, '✅ बॉट एक्टिव है! लाइव रिपोर्ट देखने के लिए `/status` टाइप करें।')
+                send_telegram_message(chat_id, '✅ बॉट एक्टिव है! लाइव रिपोर्ट देखने के लिए नीचे दिए गए बटन पर क्लिक करें या `/status` भेजें।')
 
     except Exception as e:
         logging.error(f'Webhook Error: {e}')
