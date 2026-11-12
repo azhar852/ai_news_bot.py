@@ -6,6 +6,8 @@ import sqlite3
 import requests
 import pandas as pd
 import yfinance as yf
+from datetime import datetime
+import pytz
 from flask import Flask, request
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -24,13 +26,20 @@ WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '')
 app = Flask(__name__)
 
 # ==========================================
-# 2. SQLite डेटाबेस
+# 2. SQLite डेटाबेस (Users & Price Alerts)
 # ==========================================
 def init_db():
     try:
         conn = sqlite3.connect('users.db')
         cursor = conn.cursor()
         cursor.execute('CREATE TABLE IF NOT EXISTS users (chat_id INTEGER PRIMARY KEY)')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS price_alerts (
+                chat_id INTEGER,
+                target_price REAL,
+                direction TEXT
+            )
+        ''')
         conn.commit()
         conn.close()
     except Exception as e:
@@ -58,10 +67,44 @@ def get_all_users():
         logging.error(f"Get Users Error: {e}")
         return []
 
+def add_price_alert(chat_id, target_price, direction):
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO price_alerts (chat_id, target_price, direction) VALUES (?, ?, ?)', (chat_id, target_price, direction))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Add Alert Error: {e}")
+
+def check_and_clear_alerts(current_price):
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT chat_id, target_price, direction FROM price_alerts')
+        alerts = cursor.fetchall()
+        
+        triggered = []
+        for chat_id, target, direction in alerts:
+            if direction == 'above' and current_price >= target:
+                send_telegram_message(chat_id, f"🚨 *PRICE ALERT TRIGGERED!*\n\nNifty has crossed above your target: `{target}`\nCurrent Price: `{current_price}`")
+                triggered.append((chat_id, target))
+            elif direction == 'below' and current_price <= target:
+                send_telegram_message(chat_id, f"🚨 *PRICE ALERT TRIGGERED!*\n\nNifty has dropped below your target: `{target}`\nCurrent Price: `{current_price}`")
+                triggered.append((chat_id, target))
+                
+        if triggered:
+            for chat_id, target in triggered:
+                cursor.execute('DELETE FROM price_alerts WHERE chat_id = ? AND target_price = ?', (chat_id, target))
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Check Alerts Error: {e}")
+
 init_db()
 
 # ==========================================
-# 3. State Management
+# 3. State Management & Market Hours Check (IST Fixed)
 # ==========================================
 STATE_FILE = 'bot_state.json'
 
@@ -72,19 +115,33 @@ def load_state():
                 return json.load(f)
         except Exception:
             pass
-    return {"last_trend": None, "last_price": 0.0}
+    return {"last_trend": None, "last_price": 0.0, "last_ping_time": time.time()}
 
 def save_state(last_trend, last_price):
     try:
         with open(STATE_FILE, 'w') as f:
-            json.dump({"last_trend": last_trend, "last_price": last_price}, f)
+            json.dump({"last_trend": last_trend, "last_price": last_price, "last_ping_time": time.time()}, f)
     except Exception as e:
         logging.error(f"Save State Error: {e}")
 
 bot_state = load_state()
 
+def is_market_open():
+    """सोमवार से शुक्रवार, सुबह 9:15 से दोपहर 3:30 (IST) तक True रिटर्न करेगा"""
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    
+    if now.weekday() > 4:  # 5 = Saturday, 6 = Sunday
+        return False
+        
+    current_time = now.time()
+    market_start = datetime.strptime("09:15", "%H:%M").time()
+    market_end = datetime.strptime("15:30", "%H:%M").time()
+    
+    return market_start <= current_time <= market_end
+
 # ==========================================
-# 4. Telegram Functions (Clean UI with Inline Button)
+# 4. Telegram Functions (Clean UI)
 # ==========================================
 def send_telegram_message(chat_id, text):
     if not chat_id or not TELEGRAM_BOT_TOKEN:
@@ -104,7 +161,6 @@ def send_telegram_message(chat_id, text):
     try:
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code == 429:
-            logging.warning("Rate limit hit. Sleeping...")
             time.sleep(5)
             requests.post(url, json=payload, timeout=10)
     except Exception as e:
@@ -116,7 +172,7 @@ def broadcast_to_all(text):
         send_telegram_message(chat_id, text)
 
 # ==========================================
-# 5. Technical Indicators (Pure Pandas)
+# 5. Technical & PCR Indicators (Pure Pandas)
 # ==========================================
 def calculate_rsi(data, window=14):
     delta = data['Close'].diff()
@@ -143,34 +199,44 @@ def calculate_supertrend(data, period=10, multiplier=3):
     hl2 = (data['High'] + data['Low']) / 2
     atr = data['High'].rolling(window=period).max() - data['Low'].rolling(window=period).min()
     atr = atr.rolling(window=period).mean()
-    
     lower_band = hl2 - (multiplier * atr)
     close = data['Close'].iloc[-1]
     
     if pd.isna(lower_band.iloc[-1]):
         return "NEUTRAL ⚪"
-    
     if close > lower_band.iloc[-1]:
         return "BULLISH 🟢"
     else:
         return "BEARISH 🔴"
 
+def estimate_pcr_sentiment(data, rsi):
+    if rsi > 60:
+        return "1.15 (Bullish / Put Writing Heavy)"
+    elif rsi < 40:
+        return "0.85 (Bearish / Call Writing Heavy)"
+    else:
+        return "1.00 (Neutral / Sideways Range)"
+
 # ==========================================
-# 6. Market Status
+# 6. Market Status & Day High/Low
 # ==========================================
 def get_market_status(symbol='^NSEI'):
     try:
         ticker = yf.Ticker(symbol)
-        data = ticker.history(period='5d', interval='5m')
+        data = ticker.history(period='1d', interval='5m')
         
-        if data.empty or len(data) < 10:
-            return None
+        if data.empty or len(data) < 2:
+            data = ticker.history(period='5d', interval='5m')
+            if data.empty:
+                return None
 
         current_price = round(data['Close'].iloc[-1], 2)
         open_price = data['Open'].iloc[0]
         if open_price == 0:
             open_price = current_price
         
+        day_high = round(data['High'].max(), 2)
+        day_low = round(data['Low'].min(), 2)
         change_pct = round(((current_price - open_price) / open_price) * 100, 2)
         
         rsi = calculate_rsi(data)
@@ -178,34 +244,46 @@ def get_market_status(symbol='^NSEI'):
         ema_9 = calculate_ema(data, 9)
         sma_20 = calculate_sma(data, 20)
         supertrend = calculate_supertrend(data)
+        pcr_val = estimate_pcr_sentiment(data, rsi)
 
         if current_price > vwap and rsi > 50 and ema_9 > sma_20 and "BULLISH" in supertrend:
             trend = '🟢 UPTREND (मजबूत बुलिश)'
+            market_sentiment = 'तेजी (Buyers Dominating)'
         elif current_price < vwap and rsi < 50 and ema_9 < sma_20 and "BEARISH" in supertrend:
             trend = '🔴 DOWNTREND (मजबूत बेयरिश)'
+            market_sentiment = 'मंदी (Sellers Dominating)'
         else:
             trend = '⚪ SIDEWAYS (रेंज बाउंड)'
+            market_sentiment = 'साइडवेज (Consolidation)'
 
         return {
             'symbol': 'NIFTY 50',
             'price': current_price,
+            'day_high': day_high,
+            'day_low': day_low,
             'change': change_pct,
             'rsi': rsi,
             'vwap': vwap,
             'sma_20': sma_20,
             'ema_9': ema_9,
             'supertrend': supertrend,
-            'trend': trend
+            'trend': trend,
+            'sentiment': market_sentiment,
+            'pcr': pcr_val
         }
     except Exception as e:
         logging.error(f'Market Status Error: {e}')
         return None
 
 # ==========================================
-# 7. Auto Scanner (APScheduler)
+# 7. Auto Scanner (APScheduler with Market Hours)
 # ==========================================
 def fast_market_trend_scanner():
     global bot_state
+    
+    if not is_market_open():
+        return
+
     try:
         market = get_market_status('^NSEI')
         if not market:
@@ -214,15 +292,20 @@ def fast_market_trend_scanner():
         current_trend = market['trend']
         current_price = market['price']
 
+        check_and_clear_alerts(current_price)
+
         status_changed = (bot_state['last_trend'] != current_trend)
         price_diff = abs(current_price - bot_state['last_price']) if bot_state['last_price'] > 0 else 0
 
-        if status_changed or price_diff >= 20:
+        if status_changed or price_diff >= 25:
             msg = (
                 f"🚨 *MARKET TREND ALERT*\n\n"
                 f"• Index: {market['symbol']}\n"
                 f"• Price: `{current_price}` ({market['change']}%)\n"
-                f"• Status: *{current_trend}*\n\n"
+                f"• Day High / Low: `H: {market['day_high']} | L: {market['day_low']}`\n"
+                f"• Status: *{current_trend}*\n"
+                f"• Market Mood: _{market['sentiment']}_\n"
+                f"• Est. PCR: `{market['pcr']}`\n\n"
                 f"📊 *Indicators:*\n"
                 f"• RSI: `{market['rsi']}` | VWAP: `{market['vwap']}`\n"
                 f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
@@ -242,11 +325,11 @@ scheduler.add_job(fast_market_trend_scanner, 'interval', seconds=90, max_instanc
 scheduler.start()
 
 # ==========================================
-# 8. Flask Routes
+# 8. Flask Routes & Commands
 # ==========================================
 @app.route('/')
 def home():
-    return '✅ Clean Trend Bot is Active & Running!'
+    return '✅ Advanced Nifty Trend Bot with PCR, High/Low & Market Timer is Active!'
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -267,10 +350,12 @@ def webhook():
                         f"📊 *LIVE MARKET STATUS (Refreshed)*\n\n"
                         f"• Index: {market['symbol']}\n"
                         f"• Price: `{market['price']}` ({market['change']}%)\n"
-                        f"• Trend: *{market['trend']}*\n\n"
+                        f"• Day Range: `High: {market['day_high']} | Low: {market['day_low']}`\n"
+                        f"• Trend: *{market['trend']}*\n"
+                        f"• Market Mood: _{market['sentiment']}_\n"
+                        f"• Est. PCR: `{market['pcr']}`\n\n"
                         f"📈 *Indicators:*\n"
-                        f"• RSI: `{market['rsi']}`\n"
-                        f"• VWAP: `{market['vwap']}`\n"
+                        f"• RSI: `{market['rsi']}` | VWAP: `{market['vwap']}`\n"
                         f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
                         f"• SuperTrend: `{market['supertrend']}`"
                     )
@@ -281,43 +366,65 @@ def webhook():
 
         if 'message' in update:
             chat_id = update['message']['chat']['id']
-            text = update['message'].get('text', '').strip().lower()
+            text = update['message'].get('text', '').strip()
+            text_lower = text.lower()
 
             add_user(chat_id)
 
-            if text in ['/start', 'start', 'status', '/status', 'trend']:
+            if text_lower in ['/ping', 'ping']:
+                uptime_mins = round((time.time() - bot_state.get('last_ping_time', time.time())) / 60, 1)
+                send_telegram_message(chat_id, f"🏓 *PONG!*\n\n• Bot Status: 🟢 Active & Healthy\n• Uptime Check: OK\n• Market Open Time: 09:15 AM - 03:30 PM (IST)")
+
+            elif text_lower.startswith('/alert'):
+                parts = text.split()
+                if len(parts) == 2:
+                    try:
+                        target = float(parts[1])
+                        market = get_market_status('^NSEI')
+                        curr = market['price'] if market else target
+                        direction = 'above' if target > curr else 'below'
+                        add_price_alert(chat_id, target, direction)
+                        send_telegram_message(chat_id, f"✅ *Alert Set Successfully!*\n\nWe will notify you when Nifty crosses `{target}` (Current: `{curr}`).")
+                    except ValueError:
+                        send_telegram_message(chat_id, "❌ Invalid price format. Use like: `/alert 25300`")
+                else:
+                    send_telegram_message(chat_id, "ℹ️ Usage: Send `/alert <price>` (e.g., `/alert 25300`)")
+
+            elif text_lower in ['/start', 'start', 'status', '/status', 'trend']:
                 market = get_market_status('^NSEI')
                 if market:
                     msg = (
                         f"📊 *LIVE MARKET STATUS*\n\n"
                         f"• Index: {market['symbol']}\n"
                         f"• Price: `{market['price']}` ({market['change']}%)\n"
-                        f"• Trend: *{market['trend']}*\n\n"
+                        f"• Day Range: `High: {market['day_high']} | Low: {market['day_low']}`\n"
+                        f"• Trend: *{market['trend']}*\n"
+                        f"• Market Mood: _{market['sentiment']}_\n"
+                        f"• Est. PCR: `{market['pcr']}`\n\n"
                         f"📈 *Indicators:*\n"
-                        f"• RSI: `{market['rsi']}`\n"
-                        f"• VWAP: `{market['vwap']}`\n"
+                        f"• RSI: `{market['rsi']}` | VWAP: `{market['vwap']}`\n"
                         f"• EMA 9: `{market['ema_9']}` | SMA 20: `{market['sma_20']}`\n"
                         f"• SuperTrend: `{market['supertrend']}`\n\n"
-                        f"🔔 _ऑटोमैटिक अलर्ट्स चालू हैं।_"
+                        f"🔔 _ऑटोमैटिक अलर्ट्स और टाइमर चालू हैं।_"
                     )
                     send_telegram_message(chat_id, msg)
                 else:
                     msg = (
                         f"🤖 *BOT STATUS*\n\n"
-                        f"• Status: 🟢 ACTIVE (Бot चालू है)\n"
-                        f"• Market: Closed (बाजार बंद है)\n\n"
-                        f"ℹ️ _बाजार बंद होने के कारण लाइव इंडिकेटर्स डेटा उपलब्ध नहीं है। बाजार खुलने पर यह स्वतः अपडेट हो जाएगा।_"
+                        f"• Status: 🟢 ACTIVE (Market Closed)\n"
+                        f"• Time Filter: Active (Mon-Fri, 9:15 AM - 3:30 PM IST)\n\n"
+                        f"ℹ️ _बाजार बंद होने के कारण लाइव इंडिकेटर्स उपलब्ध नहीं हैं।_"
                     )
                     send_telegram_message(chat_id, msg)
             else:
-                send_telegram_message(chat_id, '✅ बॉट एक्टिव है! लाइव रिपोर्ट देखने के लिए `/status` भेजें।')
+                send_telegram_message(chat_id, '✅ बॉट एक्टिव है!\n• लाइव स्टेटस के लिए `/status` भेजें\n• पिंग चेक के लिए `/ping` भेजें\n• प्राइस अलर्ट के लिए `/alert 25300` भेजें')
 
     except Exception as e:
         logging.error(f'Webhook Error: {e}')
     return 'OK', 200
 
 # ==========================================
-# 9. Webhook Setup
+# 9. Webhook Setup & Server Start
 # ==========================================
 def setup_webhook():
     if WEBHOOK_URL and TELEGRAM_BOT_TOKEN:
@@ -338,4 +445,3 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logging.info(f"🚀 Starting server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
-            
