@@ -84,14 +84,12 @@ def save_state(last_trend, last_price):
 bot_state = load_state()
 
 # ==========================================
-# 4. Telegram Functions (Inline Buttons & Clean Screen)
+# 4. Telegram Functions (Clean UI with Inline Button)
 # ==========================================
 def send_telegram_message(chat_id, text):
     if not chat_id or not TELEGRAM_BOT_TOKEN:
         return
     url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    
-    # यहाँ इनलाइन बटन जोड़ा गया है जो चैट स्क्रीन को गंदा नहीं करता और पुराने की-बोर्ड को हटा देता है
     payload = {
         'chat_id': chat_id,
         'text': text,
@@ -165,8 +163,7 @@ def get_market_status(symbol='^NSEI'):
         ticker = yf.Ticker(symbol)
         data = ticker.history(period='5d', interval='5m')
         
-        if data.empty or len(data) < 20:
-            logging.warning("Empty or insufficient data from yfinance")
+        if data.empty or len(data) < 10:
             return None
 
         current_price = round(data['Close'].iloc[-1], 2)
@@ -236,7 +233,6 @@ def fast_market_trend_scanner():
             bot_state['last_trend'] = current_trend
             bot_state['last_price'] = current_price
             save_state(current_trend, current_price)
-            logging.info(f"Alert sent: {current_trend} at {current_price}")
 
     except Exception as e:
         logging.error(f'Scanner Error: {e}')
@@ -259,7 +255,6 @@ def webhook():
         if not update:
             return 'OK', 200
 
-        # यदि यूजर ने इनलाइन बटन दबाया है (Callback Query)
         if 'callback_query' in update:
             callback = update['callback_query']
             chat_id = callback['message']['chat']['id']
@@ -280,9 +275,10 @@ def webhook():
                         f"• SuperTrend: `{market['supertrend']}`"
                     )
                     send_telegram_message(chat_id, msg)
+                else:
+                    send_telegram_message(chat_id, 'ℹ️ बाजार अभी बंद है। लाइव डेटा बाजार खुलने पर उपलब्ध होगा।')
             return 'OK', 200
 
-        # सामान्य टेक्स्ट मैसेज के लिए (/start या /status)
         if 'message' in update:
             chat_id = update['message']['chat']['id']
             text = update['message'].get('text', '').strip().lower()
@@ -306,9 +302,15 @@ def webhook():
                     )
                     send_telegram_message(chat_id, msg)
                 else:
-                    send_telegram_message(chat_id, '⚠️ मार्केट बंद है या डेटा लोड हो रहा है। कृपया कुछ सेकंड बाद प्रयास करें।')
+                    msg = (
+                        f"🤖 *BOT STATUS*\n\n"
+                        f"• Status: 🟢 ACTIVE (Бot चालू है)\n"
+                        f"• Market: Closed (बाजार बंद है)\n\n"
+                        f"ℹ️ _बाजार बंद होने के कारण लाइव इंडिकेटर्स डेटा उपलब्ध नहीं है। बाजार खुलने पर यह स्वतः अपडेट हो जाएगा।_"
+                    )
+                    send_telegram_message(chat_id, msg)
             else:
-                send_telegram_message(chat_id, '✅ बॉट एक्टिव है! लाइव रिपोर्ट देखने के लिए नीचे दिए गए बटन पर क्लिक करें या `/status` भेजें।')
+                send_telegram_message(chat_id, '✅ बॉट एक्टिव है! लाइव रिपोर्ट देखने के लिए `/status` भेजें।')
 
     except Exception as e:
         logging.error(f'Webhook Error: {e}')
@@ -336,4 +338,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logging.info(f"🚀 Starting server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
-    
+        
